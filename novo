@@ -5,57 +5,27 @@ function isLocator(obj) {
   return obj && typeof obj.evaluate === 'function';
 }
 
-class LibExpect {
-  constructor(locator) {
-    this.locator = locator;
-  }
-
-  async not(method, ...args) {
-    await playwrightExpect(this.locator).not[method](...args);
-  }
-
-  async method(method, ...args) {
-    await playwrightExpect(this.locator)[method](...args);
-  }
-}
-
 const expect = (locator) => {
   if (isLocator(locator)) {
-    return new Proxy(playwrightExpect(locator), {
-      get: (target, prop) => {
-        if (prop === 'not') {
-          return new Proxy(target.not, {
-            get: (notTarget, method) => {
-              return async (...args) => {
-                await target.not[method](...args);
-              };
-            }
-          });
-        }
-        return async (...args) => {
-          await target[prop](...args);
-        };
-      }
-    });
+    // Se for um Locator, usa diretamente o expect nativo do Playwright
+    return playwrightExpect(locator);
   }
 
-  // Se não for um locator, mantém o comportamento original
-  const libExpect = new LibExpect(locator);
-
-  return new Proxy(libExpect, {
+  // Se não for um Locator, continue com o comportamento customizado
+  return new Proxy({}, {
     get: (target, prop) => {
       if (prop === 'not') {
-        return new Proxy(playwrightExpect(locator).not, {
+        return new Proxy({}, {
           get: (target, method) => {
             return async (...args) => {
-              await libExpect.not(method, ...args);
+              await playwrightExpect(locator).not[method](...args);
             };
           }
         });
       }
 
       return async (...args) => {
-        await libExpect.method(prop, ...args);
+        await playwrightExpect(locator)[prop](...args);
       };
     }
   });
@@ -64,5 +34,5 @@ const expect = (locator) => {
 // Exemplo de uso
 async function toBeAttached() {
   const locator = page.locator('input[name=AGN]');
-  await expect(locator).toBeAttached();  // Funciona agora corretamente
+  await expect(locator).toBeAttached();  // Funciona corretamente agora
 }
