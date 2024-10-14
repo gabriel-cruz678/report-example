@@ -1,13 +1,13 @@
 const { expect: playwrightExpect } = require('@playwright/test');
 
-// Wrapper para o expect, que aceita apenas Locators
+// Função simples que valida se o expect está sendo usado com um Locator válido
 function expectWrapper(locator) {
-    // Verifica se o locator é um objeto válido e se é um Locator
-    if (typeof locator !== 'object' || typeof locator.isVisible !== 'function') {
+    // Verifica se o argumento é um Locator do Playwright (checa o método `isVisible`)
+    if (!locator || typeof locator.isVisible !== 'function') {
         throw new Error('O expect deve ser usado com um objeto Locator do Playwright.');
     }
 
-    // Retorna o expect original do Playwright para o Locator
+    // Retorna o expect original do Playwright, aplicado ao Locator
     return playwrightExpect(locator);
 }
 
