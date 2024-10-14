@@ -1,101 +1,82 @@
-const { expect: playwrightExpect } = require('@playwright/test');
-const util = require('./util');
-const logger = require('./logger');
+const { chromium } = require('playwright');
+const { expect } = require('./expect'); // Expect com proxy que criámos
+const util = require('./util');  // Para captura de screenshots
 
-// Função para criar matchers e aplicar asserções
-function createMatchers(actual, info) {
-    return new Proxy(playwrightExpect(actual), new ExpectMetaInfoProxyHandler(info));
+// Função que inicializa o navegador, contexto e página com proxy
+async function start(opcoes = { navegador: 'chromium', headless: true }) {
+    let browser;
+    
+    // Lançamento do navegador com base nas opções fornecidas
+    switch (opcoes.navegador) {
+        case 'chromium':
+            browser = await chromium.launch({ headless: opcoes.headless });
+            break;
+        default:
+            throw new Error('Navegador não suportado');
+    }
+
+    // Criação do contexto e da página
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    
+    // Definir a página no utilitário para captura de screenshots
+    util.setPage(page);
+
+    return {
+        browser,
+        context,
+        // Cria um proxy para o page e o expect
+        page: createPageProxy(page),
+        expect: (locator) => createExpectProxy(locator) // Usa o expect com proxy
+    };
 }
 
-// Função para criar o expect com Proxy
-function createExpect(info) {
-    const expectInstance = new Proxy(playwrightExpect, {
-        apply: function (target, thisArg, argumentsList) {
-            const [actual, messageOrOptions] = argumentsList;
-            const message = typeof messageOrOptions === 'string' ? messageOrOptions : messageOrOptions?.message || info.message;
-            const newInfo = { ...info, message };
-            
-            if (newInfo.isPoll) {
-                if (typeof actual !== 'function') {
-                    throw new Error('`expect.poll()` aceita apenas funções como primeiro argumento');
-                }
-                newInfo.generator = actual;
-            }
-            return createMatchers(actual, newInfo);
-        },
-        get: function (target, property) {
-            // Lida com a configuração do expect (como `not`, `poll`, etc.)
-            if (property === 'not') {
-                return new Proxy(target, {
-                    get: (target, matcher) => {
-                        return (...args) => {
-                            info.isNot = !info.isNot;
-                            return createMatchers(target, info)[matcher](...args);
-                        };
-                    }
-                });
-            }
-            if (property === 'poll') {
-                return (actual, messageOrOptions) => {
-                    const poll = typeof messageOrOptions === 'string' ? {} : messageOrOptions || {};
-                    return createExpect({ ...info, isPoll: true, poll });
+// Função para criar um proxy para a página
+function createPageProxy(page) {
+    return new Proxy(page, {
+        get(target, prop) {
+            // Intercepta chamadas para "locator" e "getBy..." (métodos Playwright)
+            if (prop.startsWith('getBy') || prop === 'locator') {
+                return (...args) => {
+                    const locatorInstance = target[prop](...args);
+                    return createLocatorProxy(locatorInstance); // Proxy para o Locator
                 };
             }
-            if (property === 'soft') {
-                return (actual, messageOrOptions) => {
-                    return createExpect({ ...info, isSoft: true })(actual, messageOrOptions);
+
+            // Intercepta o "goto" para capturar screenshots automaticamente
+            if (prop === 'goto') {
+                return async (...args) => {
+                    const result = await target[prop](...args);
+                    await util.screenshot(`Goto na URL '${args[0]}'`, target); // Captura screenshot após ir à página
+                    return result;
                 };
             }
-            return playwrightExpect[property];
+
+            // Retorna funções padrão da página do Playwright
+            if (typeof target[prop] === 'function') {
+                return (...args) => target[prop](...args);
+            }
+
+            return target[prop]; // Caso contrário, retorna a propriedade diretamente
         }
     });
-    
-    return expectInstance;
 }
 
-// Handler para gerenciar meta-informações durante as asserções
-class ExpectMetaInfoProxyHandler {
-    constructor(info) {
-        this._info = { ...info };
-    }
-
-    get(target, matcherName, receiver) {
-        let matcher = Reflect.get(target, matcherName, receiver);
-        if (typeof matcherName !== 'string') return matcher;
-        if (matcher === undefined) throw new Error(`Expect: Propriedade '${matcherName}' não encontrada.`);
-        if (typeof matcher !== 'function') {
-            return matcher;
+// Função para criar um proxy para o locator
+function createLocatorProxy(locator) {
+    return new Proxy(locator, {
+        get(target, prop) {
+            if (typeof target[prop] === 'function') {
+                return async (...args) => target[prop](...args); // Invoca os métodos do Locator
+            }
+            return target[prop]; // Retorna diretamente propriedades
         }
-        if (this._info.isPoll) {
-            throw new Error(`\`expect.poll()\` não suporta o matcher "${matcherName}".`);
-        }
-        return (...args) => {
-            logger.info(`Iniciando o matcher: ${matcherName}`);
-            return matcher.apply(target, args);
-        };
-    }
+    });
 }
 
-// Função utilitária para lidar com polling (métodos de polling em matchers)
-async function pollMatcher(matcherName, isNot, pollIntervals, timeout, generator, ...args) {
-    const result = await util.pollAgainstDeadline(async () => {
-        const value = await generator();
-        let expectInstance = playwrightExpect(value);
-        if (isNot) expectInstance = expectInstance.not;
-        try {
-            expectInstance[matcherName].apply(expectInstance, args);
-            return { continuePolling: false };
-        } catch (error) {
-            return { continuePolling: true, result: error };
-        }
-    }, timeout, pollIntervals || [100, 250, 500, 1000]);
-    
-    if (result.timedOut) {
-        throw new Error(`Timeout ao executar o matcher "${matcherName}".`);
-    }
+// Função para criar o expect proxy com base no Locator
+function createExpectProxy(locator) {
+    return expect(locator); // Usa o expect proxy criado anteriormente
 }
 
-// Definindo o custom expect com o Proxy
-const expect = createExpect({});
-
-module.exports = { expect };
+module.exports = { start, expect };
