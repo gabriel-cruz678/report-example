@@ -1,53 +1,96 @@
 const { expect: playwrightExpect } = require('@playwright/test');
-const logger = require('./logger');
 const util = require('./util');
+const logger = require('./logger');
 
-class LibExpected {
-    constructor(locator) {
-        this.locator = locator;
-    }
-
-    async not(method, ...args) {
-        const capturaAcao = `not.${method}`;
-        logger.info(`Iniciando a ação: ${capturaAcao}`);
-        await playwrightExpect(this.locator).not[method](...args);
-        await this.captureScreenshot(capturaAcao); // Captura a tela após a execução
-    }
-
-    async method(method, ...args) {
-        const capturaAcao = `${method}`;
-        logger.info(`Iniciando a ação: ${capturaAcao}`);
-        await playwrightExpect(this.locator)[method](...args);
-        await this.captureScreenshot(capturaAcao); // Captura a tela após a execução
-    }
-
-    async captureScreenshot(fileName) {
-        await util.screenshot(fileName); // Captura a tela sem passar a página
-    }
-}
-
-const expect = (locator) => {
+// Função para criar proxy para o expect, similar ao createLocatorProxy
+function createExpectProxy(locator) {
     return new Proxy({}, {
-        get: (target, prop) => {
+        get(target, prop) {
+            // Intercepta o método 'not'
             if (prop === 'not') {
                 return new Proxy({}, {
-                    get: (target, method) => {
+                    get(target, method) {
                         return async (...args) => {
-                            const locatorInstance = await locator;
-                            const libExpected = new LibExpected(locatorInstance);
-                            return libExpected.not(method, ...args);
+                            logger.info(`Expect not.${method} being called`);
+                            await playwrightExpect(locator).not[method](...args); // Aplica a asserção "not"
+                            await util.screenshot(`not.${method}`, locator); // Captura a tela após a asserção
                         };
                     }
                 });
-            } else {
-                return async (...args) => {
-                    const locatorInstance = await locator;
-                    const libExpected = new LibExpected(locatorInstance);
-                    return libExpected.method(prop, ...args);
-                };
             }
+
+            // Intercepta asserções normais
+            return async (...args) => {
+                logger.info(`Expect ${prop} being called`);
+                await playwrightExpect(locator)[prop](...args); // Aplica a asserção
+                await util.screenshot(`${prop}`, locator); // Captura a tela após a asserção
+            };
         }
     });
-};
+}
 
-module.exports = expect;
+// Função start semelhante ao código original
+async function start(opcoes = { navegador: 'chromium', headless: true }) {
+    let browser;
+    switch (opcoes.navegador) {
+        case 'chromium':
+            browser = await chromium.launch({ headless: opcoes.headless });
+            break;
+        default:
+            throw new Error('Navegador não suportado');
+    }
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    util.setPage(page);
+
+    return {
+        browser,
+        context,
+        page: createPageProxy(page),
+        expect: (locator) => createExpectProxy(locator) // Usa o proxy para o expect
+    };
+}
+
+// Função para criar um Proxy para o page, já fornecido
+function createPageProxy(page) {
+    return new Proxy(page, {
+        get(target, prop) {
+            if (prop.startsWith('getBy') || prop === 'locator') {
+                return (...args) => {
+                    const locatorInstance = target[prop](...args);
+                    return createLocatorProxy(locatorInstance); 
+                };
+            }
+
+            if (prop === 'goto') {
+                return async (...args) => {
+                    const result = await target[prop](...args);
+                    await util.screenshot(`Goto na URL '${args[0]}'`, target);
+                    return result;
+                };
+            }
+
+            if (typeof target[prop] === 'function') {
+                return (...args) => target[prop](...args);
+            }
+            return target[prop];
+        }
+    });
+}
+
+// Função para criar um Proxy para o locator, já fornecido
+function createLocatorProxy(locator) {
+    return new Proxy(locator, {
+        get(target, prop) {
+            if (typeof target[prop] === 'function') {
+                return async (...args) => {
+                    return target[prop](...args);
+                };
+            }
+            return target[prop];
+        }
+    });
+}
+
+module.exports = { start, expect: createExpectProxy };
