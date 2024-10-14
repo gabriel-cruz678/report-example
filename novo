@@ -1,82 +1,25 @@
-const { chromium } = require('playwright');
-const { expect } = require('./expect'); // Expect com proxy que criámos
-const util = require('./util');  // Para captura de screenshots
+const { expect: playwrightExpect } = require('@playwright/test');
 
-// Função que inicializa o navegador, contexto e página com proxy
-async function start(opcoes = { navegador: 'chromium', headless: true }) {
-    let browser;
-    
-    // Lançamento do navegador com base nas opções fornecidas
-    switch (opcoes.navegador) {
-        case 'chromium':
-            browser = await chromium.launch({ headless: opcoes.headless });
-            break;
-        default:
-            throw new Error('Navegador não suportado');
+// Wrapper simples para o expect do Playwright
+function expectWrapper(locator) {
+    if (typeof locator !== 'object' || !locator.locator) {
+        throw new Error('O expect só pode ser usado com objetos Locator.');
     }
 
-    // Criação do contexto e da página
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    
-    // Definir a página no utilitário para captura de screenshots
-    util.setPage(page);
-
-    return {
-        browser,
-        context,
-        // Cria um proxy para o page e o expect
-        page: createPageProxy(page),
-        expect: (locator) => createExpectProxy(locator) // Usa o expect com proxy
-    };
-}
-
-// Função para criar um proxy para a página
-function createPageProxy(page) {
-    return new Proxy(page, {
+    return new Proxy(playwrightExpect(locator), {
         get(target, prop) {
-            // Intercepta chamadas para "locator" e "getBy..." (métodos Playwright)
-            if (prop.startsWith('getBy') || prop === 'locator') {
-                return (...args) => {
-                    const locatorInstance = target[prop](...args);
-                    return createLocatorProxy(locatorInstance); // Proxy para o Locator
-                };
+            if (prop === 'not') {
+                // Lógica para manipular o "not"
+                return new Proxy(target.not, {
+                    get(target, method) {
+                        return (...args) => target[method](...args);
+                    }
+                });
             }
-
-            // Intercepta o "goto" para capturar screenshots automaticamente
-            if (prop === 'goto') {
-                return async (...args) => {
-                    const result = await target[prop](...args);
-                    await util.screenshot(`Goto na URL '${args[0]}'`, target); // Captura screenshot após ir à página
-                    return result;
-                };
-            }
-
-            // Retorna funções padrão da página do Playwright
-            if (typeof target[prop] === 'function') {
-                return (...args) => target[prop](...args);
-            }
-
-            return target[prop]; // Caso contrário, retorna a propriedade diretamente
+            // Retorna os métodos normais do expect
+            return (...args) => target[prop](...args);
         }
     });
 }
 
-// Função para criar um proxy para o locator
-function createLocatorProxy(locator) {
-    return new Proxy(locator, {
-        get(target, prop) {
-            if (typeof target[prop] === 'function') {
-                return async (...args) => target[prop](...args); // Invoca os métodos do Locator
-            }
-            return target[prop]; // Retorna diretamente propriedades
-        }
-    });
-}
-
-// Função para criar o expect proxy com base no Locator
-function createExpectProxy(locator) {
-    return expect(locator); // Usa o expect proxy criado anteriormente
-}
-
-module.exports = { start, expect };
+module.exports = { expect: expectWrapper };
