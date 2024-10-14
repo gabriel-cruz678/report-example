@@ -1,14 +1,37 @@
 const { expect: playwrightExpect } = require('@playwright/test');
 
-// Função simples que valida se o expect está sendo usado com um Locator válido
+// Função que verifica se o objeto é um Locator válido
+function isLocator(object) {
+    return object && typeof object === 'object' && typeof object.isVisible === 'function';
+}
+
+// Wrapper para o expect, garantindo que o Locator é passado corretamente
 function expectWrapper(locator) {
-    // Verifica se o argumento é um Locator do Playwright (checa o método `isVisible`)
-    if (!locator || typeof locator.isVisible !== 'function') {
+    // Verifica se o argumento passado é um Locator
+    if (!isLocator(locator)) {
         throw new Error('O expect deve ser usado com um objeto Locator do Playwright.');
     }
 
-    // Retorna o expect original do Playwright, aplicado ao Locator
+    // Aplica o expect original do Playwright ao Locator
     return playwrightExpect(locator);
 }
 
 module.exports = { expect: expectWrapper };
+
+
+const { chromium } = require('playwright');
+const { expect: expectWrapper } = require('./expectWrapper'); // Importa o wrapper do expect
+
+// Função para iniciar o navegador e a página
+async function start(opcoes = { headless: true }) {
+    const browser = await chromium.launch({ headless: opcoes.headless });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+
+    // Retorna o browser, context, page e o expect sobrescrito
+    return { browser, context, page, expect: expectWrapper };
+}
+
+module.exports = { start };
+
+
