@@ -1,25 +1,14 @@
 const { expect: playwrightExpect } = require('@playwright/test');
 
-// Wrapper simples para o expect do Playwright
+// Wrapper para o expect, que aceita apenas Locators
 function expectWrapper(locator) {
-    if (typeof locator !== 'object' || !locator.locator) {
-        throw new Error('O expect só pode ser usado com objetos Locator.');
+    // Verifica se o locator é um objeto válido e se é um Locator
+    if (typeof locator !== 'object' || typeof locator.isVisible !== 'function') {
+        throw new Error('O expect deve ser usado com um objeto Locator do Playwright.');
     }
 
-    return new Proxy(playwrightExpect(locator), {
-        get(target, prop) {
-            if (prop === 'not') {
-                // Lógica para manipular o "not"
-                return new Proxy(target.not, {
-                    get(target, method) {
-                        return (...args) => target[method](...args);
-                    }
-                });
-            }
-            // Retorna os métodos normais do expect
-            return (...args) => target[prop](...args);
-        }
-    });
+    // Retorna o expect original do Playwright para o Locator
+    return playwrightExpect(locator);
 }
 
 module.exports = { expect: expectWrapper };
