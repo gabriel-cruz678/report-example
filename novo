@@ -1,37 +1,475 @@
-const { expect: playwrightExpect } = require('@playwright/test');
+import fs from 'fs';
+import path from 'path';
+import { spawn } from 'child_process';
+import type {
+  ChromiumCodegenOptions,
+  ChromiumCodegenResult,
+  CodegenRecorderOptions,
+  RecorderActionInput,
+  RecorderActionOutput,
+  RecorderFunctionName,
+  RecorderLocatorInfo,
+} from './types';
+import {
+  createDefaultOutputFile,
+  createTempOutputFile,
+  ensureAbsolutePath,
+  formatGeolocation,
+  formatViewport,
+  resolveLocalPlaywrightBinary,
+  resolveNpxCommand,
+  sanitizeFileName,
+} from './utils';
 
-// Função que verifica se o objeto é um Locator válido
-function isLocator(object) {
-    return object && typeof object === 'object' && typeof object.isVisible === 'function';
+export function buildChromiumCodegenArgs(options: ChromiumCodegenOptions = {}): string[] {
+  const args: string[] = ['codegen'];
+
+  args.push('--browser', options.browser ?? 'chromium');
+  args.push('--target', options.target ?? 'playwright-test');
+
+  if (options.testIdAttribute) {
+    args.push('--test-id-attribute', options.testIdAttribute);
+  }
+
+  if (options.device) {
+    args.push('--device', options.device);
+  }
+
+  const viewport = formatViewport(options.viewport);
+  if (viewport) {
+    args.push('--viewport-size', viewport);
+  }
+
+  if (options.colorScheme) {
+    args.push('--color-scheme', options.colorScheme);
+  }
+
+  if (options.lang) {
+    args.push('--lang', options.lang);
+  }
+
+  if (options.timezone) {
+    args.push('--timezone', options.timezone);
+  }
+
+  const geolocation = formatGeolocation(options.geolocation);
+  if (geolocation) {
+    args.push('--geolocation', geolocation);
+  }
+
+  if (options.saveStorage) {
+    args.push('--save-storage', options.saveStorage);
+  }
+
+  if (options.loadStorage) {
+    args.push('--load-storage', options.loadStorage);
+  }
+
+  if (options.userDataDir) {
+    args.push('--user-data-dir', options.userDataDir);
+  }
+
+  if (options.extraArgs?.length) {
+    args.push(...options.extraArgs);
+  }
+
+  if (options.url) {
+    args.push(options.url);
+  }
+
+  return args;
 }
 
-// Wrapper para o expect, garantindo que o Locator é passado corretamente
-function expectWrapper(locator) {
-    // Verifica se o argumento passado é um Locator
-    if (!isLocator(locator)) {
-        throw new Error('O expect deve ser usado com um objeto Locator do Playwright.');
+export function resolveChromiumCodegenCommand(cwd: string): { command: string; argsPrefix: string[] } {
+  const localBinary = resolveLocalPlaywrightBinary(cwd);
+  if (localBinary) {
+    return { command: localBinary, argsPrefix: [] };
+  }
+
+  return {
+    command: resolveNpxCommand(),
+    argsPrefix: ['playwright'],
+  };
+}
+
+export async function runChromiumCodegen(options: ChromiumCodegenOptions = {}): Promise<ChromiumCodegenResult> {
+  const cwd = path.resolve(options.cwd ?? process.cwd());
+  const outputFile = options.outputFile
+    ? ensureAbsolutePath(options.outputFile, cwd)
+    : createDefaultOutputFile(cwd);
+
+  const { command, argsPrefix } = resolveChromiumCodegenCommand(cwd);
+  const args = [...argsPrefix, ...buildChromiumCodegenArgs(options)];
+
+  const outputIndex = args.indexOf('--output');
+  if (outputIndex === -1) {
+    args.splice(argsPrefix.length + 1, 0, '--output', outputFile);
+  }
+
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        ...options.env,
+      },
+    });
+
+    child.on('error', reject);
+    child.on('close', (code: number | null) => resolve(code ?? 0));
+  });
+
+  if (exitCode !== 0) {
+    throw new Error(`Playwright codegen finalizou com código ${exitCode}.`);
+  }
+
+  const code = fs.existsSync(outputFile)
+    ? fs.readFileSync(outputFile, 'utf8')
+    : undefined;
+
+  return {
+    command,
+    args,
+    outputFile,
+    exitCode,
+    code,
+  };
+}
+
+export async function runChromiumCodegenInTempFile(
+  options: Omit<ChromiumCodegenOptions, 'outputFile'> = {},
+): Promise<ChromiumCodegenResult> {
+  return runChromiumCodegen({
+    ...options,
+    outputFile: createTempOutputFile(),
+  });
+}
+
+export class CodegenRecorder {
+  private readonly cwd: string;
+  private readonly outputDir: string;
+  private readonly promptPageVarName: string;
+  private readonly promptTestVarName: string;
+  private readonly actions: RecorderActionOutput[] = [];
+  private readonly actionsByPageKey = new Map<string, RecorderActionOutput[]>();
+  private readonly outputJsonPathByPageKey = new Map<string, string>();
+  private outputJsonPath?: string;
+  private promptLogPath?: string;
+
+  public constructor(options: CodegenRecorderOptions = {}) {
+    this.cwd = path.resolve(options.cwd ?? process.cwd());
+
+    const explicitOutputJsonPath = options.outputJsonPath
+      ? ensureAbsolutePath(options.outputJsonPath, this.cwd)
+      : undefined;
+
+    this.outputDir = options.outputDir
+      ? ensureAbsolutePath(options.outputDir, this.cwd)
+      : explicitOutputJsonPath
+        ? path.dirname(explicitOutputJsonPath)
+        : path.resolve(this.cwd, '.cache');
+
+    fs.mkdirSync(this.outputDir, { recursive: true });
+
+    this.promptLogPath = options.promptLogPath
+      ? ensureAbsolutePath(options.promptLogPath, this.cwd)
+      : path.join(this.outputDir, 'prompt.log');
+
+    this.promptPageVarName = options.promptPageVarName ?? 'sharedPage';
+    this.promptTestVarName = options.promptTestVarName ?? 'test';
+  }
+
+  public ordnalPt(n: number): string {
+    const map: Record<number, string> = {
+      1: 'primeiro',
+      2: 'segundo',
+      3: 'terceiro',
+      4: 'quarto',
+      5: 'quinto',
+      6: 'sexto',
+      7: 'sétimo',
+      8: 'oitavo',
+      9: 'nono',
+      10: 'décimo',
+    };
+    return map[n] ?? `${n}º`;
+  }
+
+  public nthFromCssSelector(sel?: string): number | null {
+    if (!sel) return null;
+    const match = sel.match(/:nth-child\((\d+)\)/i);
+    if (!match) return null;
+    const n = Number.parseInt(match[1] ?? '', 10);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  public buildPromptLine(normalizedTask: string): string {
+    const safe = this.escapeForTemplateLiteral(normalizedTask);
+    return `await prompt(\`${safe}\`, { page: ${this.promptPageVarName}, ${this.promptTestVarName} });`;
+  }
+
+  public elementTypePt(args: Record<string, unknown>): string {
+    const role = String(args.role ?? '').toLowerCase();
+    const tag = String(args.tag ?? '').toLowerCase();
+    const inputType = String(args.inputType ?? '').toLowerCase();
+
+    if (role) {
+      if (role === 'button') return 'botão';
+      if (role === 'link') return 'link';
+      if (role === 'textbox') return 'campo';
+      if (role === 'combobox') return 'lista';
+      if (role === 'checkbox') return 'checkbox';
+      if (role === 'radio') return 'opção';
+      if (role === 'switch') return 'switch';
+      if (role === 'tab') return 'aba';
+      if (role === 'menuitem') return 'item de menu';
+      if (role === 'slider') return 'controle deslizante';
     }
 
-    // Aplica o expect original do Playwright ao Locator
-    return playwrightExpect(locator);
+    if (tag) {
+      if (tag === 'button') return 'botão';
+      if (tag === 'a') return 'link';
+      if (tag === 'input') {
+        if (['checkbox', 'radio'].includes(inputType)) return inputType === 'radio' ? 'opção' : inputType;
+        return 'campo';
+      }
+      if (tag === 'textarea') return 'campo';
+      if (tag === 'select') return 'lista';
+    }
+
+    return 'elemento';
+  }
+
+  public registerAction(input: RecorderActionInput): RecorderActionOutput {
+    const pageTitle = input.title?.trim() || 'recording';
+    const normalizedTask = (input.normalizedTask?.trim() || this.buildNormalizedTask(input.functionName, input.arguments)).trim();
+
+    const output: RecorderActionOutput = {
+      normalizedTask,
+      functionName: input.functionName,
+      arguments: this.cleanArguments(input.arguments),
+      timestamp: input.timestamp ?? new Date().toISOString(),
+    };
+
+    this.actions.push(output);
+
+    const pageActions = this.getPageActions(pageTitle);
+    pageActions.push(output);
+
+    this.outputJsonPath = this.getOutputJsonPathForTitle(pageTitle);
+    this.persist(pageTitle);
+
+    return output;
+  }
+
+  public getActions(): RecorderActionOutput[] {
+    return [...this.actions];
+  }
+
+  public getOutputJsonPath(): string | undefined {
+    return this.outputJsonPath;
+  }
+
+  public getPromptLogPath(): string | undefined {
+    return this.promptLogPath;
+  }
+
+  private buildNormalizedTask(functionName: RecorderFunctionName, args: RecorderLocatorInfo): string {
+    const element = this.renderElement(args);
+    const value = args.value;
+    const key = typeof args.key === 'string' ? args.key : undefined;
+    const files = Array.isArray(args.files) ? args.files : undefined;
+
+    switch (functionName) {
+      case 'locator_fill':
+        return `Preencho ${element} com o valor ${this.renderValue(value)}`;
+      case 'locator_clear':
+        return `Limpo ${element}`;
+      case 'locator_click':
+        return `Clico ${this.renderOnElement(args)}`;
+      case 'locator_dblclick':
+        return `Dou duplo clique ${this.renderOnElement(args)}`;
+      case 'locator_check':
+        return `Marco ${element}`;
+      case 'locator_uncheck':
+        return `Desmarco ${element}`;
+      case 'locator_selectOption':
+        return value == null
+          ? `Seleciono ${element}`
+          : `Seleciono o valor ${this.renderValue(value)} ${this.renderInElement(args)}`;
+      case 'page_pressKey':
+        return key ? `Pressiono a tecla ${key}` : 'Pressiono uma tecla';
+      case 'scrollIntoElementView':
+        return `Rolo até ${element}`;
+      case 'locator_setInputFiles':
+        return files?.length
+          ? `Envio o arquivo ${files.join(', ')} para ${element}`
+          : `Envio arquivo para ${element}`;
+      default:
+        return `${functionName} ${element}`;
+    }
+  }
+
+  private cleanArguments(args: RecorderLocatorInfo): RecorderLocatorInfo {
+    const orderedEntries: Array<[string, unknown]> = [];
+    const pushIfDefined = (key: string) => {
+      const value = args[key];
+      if (value !== undefined && value !== null && value !== '') {
+        orderedEntries.push([key, value]);
+      }
+    };
+
+    pushIfDefined('id');
+    pushIfDefined('class');
+    pushIfDefined('data-testid');
+    pushIfDefined('cssSelector');
+    pushIfDefined('xpath');
+    pushIfDefined('role');
+    pushIfDefined('name');
+    pushIfDefined('tag');
+    pushIfDefined('inputType');
+    pushIfDefined('value');
+    pushIfDefined('key');
+    pushIfDefined('files');
+
+    for (const [key, value] of Object.entries(args)) {
+      if (orderedEntries.some(([current]) => current === key)) continue;
+      if (value === undefined || value === null || value === '') continue;
+      if (key === 'locator') continue;
+      orderedEntries.push([key, value]);
+    }
+
+    return Object.fromEntries(orderedEntries) as RecorderLocatorInfo;
+  }
+
+  private getPageKey(title?: string): string {
+    return sanitizeFileName(title || 'recording') || 'recording';
+  }
+
+  private getOutputJsonPathForTitle(title?: string): string {
+    const pageKey = this.getPageKey(title);
+    const existingPath = this.outputJsonPathByPageKey.get(pageKey);
+    if (existingPath) {
+      return existingPath;
+    }
+
+    const outputJsonPath = path.join(this.outputDir, `${pageKey}.json`);
+    this.outputJsonPathByPageKey.set(pageKey, outputJsonPath);
+    return outputJsonPath;
+  }
+
+  private getPageActions(title?: string): RecorderActionOutput[] {
+    const pageKey = this.getPageKey(title);
+    const existing = this.actionsByPageKey.get(pageKey);
+    if (existing) {
+      return existing;
+    }
+
+    const outputJsonPath = this.getOutputJsonPathForTitle(title);
+    const loadedActions = this.readActionsFile(outputJsonPath);
+    this.actionsByPageKey.set(pageKey, loadedActions);
+    return loadedActions;
+  }
+
+  private readActionsFile(outputJsonPath: string): RecorderActionOutput[] {
+    if (!fs.existsSync(outputJsonPath)) {
+      return [];
+    }
+
+    try {
+      const raw = fs.readFileSync(outputJsonPath, 'utf8').trim();
+      if (!raw) {
+        return [];
+      }
+
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed as RecorderActionOutput[] : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private ensureOutputPaths(title?: string): { outputJsonPath: string; promptLogPath: string } {
+    const outputJsonPath = this.getOutputJsonPathForTitle(title);
+    const promptLogPath = this.promptLogPath ?? path.join(this.outputDir, 'prompt.log');
+
+    fs.mkdirSync(path.dirname(outputJsonPath), { recursive: true });
+    fs.mkdirSync(path.dirname(promptLogPath), { recursive: true });
+
+    this.outputJsonPath = outputJsonPath;
+    this.promptLogPath = promptLogPath;
+
+    return { outputJsonPath, promptLogPath };
+  }
+
+  private persist(title?: string): void {
+    const { outputJsonPath, promptLogPath } = this.ensureOutputPaths(title);
+    const pageActions = this.getPageActions(title);
+
+    fs.writeFileSync(outputJsonPath, `${JSON.stringify(pageActions, null, 2)}\n`, 'utf8');
+
+    const promptLog = this.actions.map(action => this.buildPromptLine(action.normalizedTask)).join('\n');
+    fs.writeFileSync(promptLogPath, promptLog ? `${promptLog}\n` : '', 'utf8');
+  }
+
+  private renderElement(args: RecorderLocatorInfo): string {
+    const type = this.elementTypePt(args);
+    const article = this.definiteArticle(type);
+    const ordinal = this.renderOrdinal(args);
+    const name = this.renderName(args);
+    return `${article} ${ordinal}${type}${name}`.replace(/\s+/g, ' ').trim();
+  }
+
+  private renderOnElement(args: RecorderLocatorInfo): string {
+    const type = this.elementTypePt(args);
+    const article = this.definiteArticle(type);
+    const preposition = article === 'a' ? 'na' : 'no';
+    const ordinal = this.renderOrdinal(args);
+    const name = this.renderName(args);
+    return `${preposition} ${ordinal}${type}${name}`.replace(/\s+/g, ' ').trim();
+  }
+
+  private renderInElement(args: RecorderLocatorInfo): string {
+    const type = this.elementTypePt(args);
+    const article = this.definiteArticle(type);
+    const preposition = article === 'a' ? 'na' : 'no';
+    const ordinal = this.renderOrdinal(args);
+    const name = this.renderName(args);
+    return `${preposition} ${ordinal}${type}${name}`.replace(/\s+/g, ' ').trim();
+  }
+
+  private renderOrdinal(args: RecorderLocatorInfo): string {
+    const nth = this.nthFromCssSelector(args.cssSelector);
+    return nth ? `${this.ordnalPt(nth)} ` : '';
+  }
+
+  private renderName(args: RecorderLocatorInfo): string {
+    const name = args.name || args['data-testid'] || this.normalizeId(args.id);
+    if (!name) return '';
+    return ` ${String(name).trim()}`;
+  }
+
+  private normalizeId(id?: string): string | undefined {
+    if (!id) return undefined;
+    return String(id).replace(/^#/, '');
+  }
+
+  private renderValue(value: unknown): string {
+    if (Array.isArray(value)) {
+      return value.join(', ');
+    }
+    if (typeof value === 'boolean') {
+      return value ? 'verdadeiro' : 'falso';
+    }
+    return String(value ?? '').trim();
+  }
+
+  private definiteArticle(type: string): 'o' | 'a' {
+    return ['lista', 'opção', 'aba'].includes(type) ? 'a' : 'o';
+  }
+
+  private escapeForTemplateLiteral(input: string): string {
+    return input.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
+  }
 }
-
-module.exports = { expect: expectWrapper };
-
-
-const { chromium } = require('playwright');
-const { expect: expectWrapper } = require('./expectWrapper'); // Importa o wrapper do expect
-
-// Função para iniciar o navegador e a página
-async function start(opcoes = { headless: true }) {
-    const browser = await chromium.launch({ headless: opcoes.headless });
-    const context = await browser.newContext();
-    const page = await context.newPage();
-
-    // Retorna o browser, context, page e o expect sobrescrito
-    return { browser, context, page, expect: expectWrapper };
-}
-
-module.exports = { start };
-
-
