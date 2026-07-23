@@ -1,138 +1,166 @@
-private void handleLoadCacheJson(JsonElement payload) {
-    ApplicationManager.getApplication().invokeLater(() -> {
-        try {
-            if (payload == null || !payload.isJsonObject()) {
-                return;
-            }
+private String buildCacheFileName(
+    String method,
+    String pathOrUrl
+) {
+    String normalizedMethod =
+        normalizeCacheMethod(method);
 
-            JsonObject data = payload.getAsJsonObject();
+    String normalizedPath =
+        normalizeCachePath(pathOrUrl)
+            .replaceAll("\\{[^}]*}", "")
+            .replaceAll("[^a-z0-9]+", "_")
+            .replaceAll("^_+|_+$", "");
 
-            String method = data.has("method")
-                ? data.get("method").getAsString()
-                : "";
+    if (normalizedMethod.isEmpty()) {
+        return normalizedPath + ".json";
+    }
 
-            String path = data.has("path")
-                ? data.get("path").getAsString()
-                : "";
+    return normalizedMethod
+        + "_"
+        + normalizedPath
+        + ".json";
+}
 
-            String operationId = data.has("operationId")
-                ? data.get("operationId").getAsString()
-                : "";
+private String normalizeCacheMethod(String method) {
+    return method == null
+        ? ""
+        : method.trim().toLowerCase();
+}
 
-            String nodeId = data.has("nodeId")
-                ? data.get("nodeId").getAsString()
-                : "";
+private String normalizeCachePath(String pathOrUrl) {
+    if (pathOrUrl == null || pathOrUrl.isBlank()) {
+        return "";
+    }
 
-            /*
-             * Corrige method e path usando os dados reais
-             * carregados do Swagger.
-             */
-            SwaggerEndpointInfo swaggerEndpoint =
-                swaggerEndpointsByOperationId.get(
-                    normalizeOperationId(operationId)
-                );
+    String value = pathOrUrl.trim();
 
-            if (swaggerEndpoint != null) {
-                if (
-                    swaggerEndpoint.method != null
-                        && !swaggerEndpoint.method.isBlank()
-                ) {
-                    method = swaggerEndpoint.method;
-                }
+    try {
+        if (
+            value.startsWith("http://")
+                || value.startsWith("https://")
+        ) {
+            java.net.URI uri =
+                java.net.URI.create(value);
 
-                if (
-                    swaggerEndpoint.path != null
-                        && !swaggerEndpoint.path.isBlank()
-                ) {
-                    path = swaggerEndpoint.path;
-                }
-            }
-
-            String projectRoot = project.getBasePath();
-
-            if (projectRoot == null || projectRoot.isBlank()) {
-                return;
-            }
-
-            System.out.println(
-                "[API FLOW CACHE] operationId=" + operationId
-                    + " | method=" + method
-                    + " | path=" + path
-            );
-
-            /*
-             * Mantemos os quatro parâmetros para não quebrar
-             * outras chamadas já existentes no projeto.
-             */
-            Path cacheFile = findCacheFile(
-                projectRoot,
-                method,
-                path,
-                operationId
-            );
-
-            JsonObject resp = new JsonObject();
-
-            resp.addProperty("operationId", operationId);
-            resp.addProperty("nodeId", nodeId);
-
-            if (cacheFile == null || !Files.isRegularFile(cacheFile)) {
-                System.out.println(
-                    "[API FLOW CACHE] Cache não encontrado: "
-                        + method
-                        + " "
-                        + path
-                );
-
-                resp.addProperty("found", false);
-                resp.addProperty("cacheFilePath", "");
-                resp.add("cacheData", new JsonObject());
-
-                sendToJs(
-                    "{ type: 'cacheJsonLoaded', payload: "
-                        + resp
-                        + " }"
-                );
-
-                return;
-            }
-
-            System.out.println(
-                "[API FLOW CACHE] Cache encontrado: "
-                    + cacheFile
-            );
-
-            String content = Files.readString(
-                cacheFile,
-                StandardCharsets.UTF_8
-            );
-
-            JsonElement parsed = JsonParser.parseString(content);
-
-            JsonObject cacheData =
-                extractCachePathObject(parsed);
-
-            resp.addProperty("found", true);
-            resp.addProperty(
-                "cacheFilePath",
-                cacheFile.toString()
-            );
-            resp.add("cacheData", cacheData);
-
-            sendToJs(
-                "{ type: 'cacheJsonLoaded', payload: "
-                    + resp
-                    + " }"
-            );
-
-        } catch (Exception e) {
-            e.printStackTrace();
-
-            Messages.showErrorDialog(
-                project,
-                "Erro ao ler cache: " + e.getMessage(),
-                "BEX Automation Flow"
-            );
+            value = uri.getPath() == null
+                ? ""
+                : uri.getPath();
         }
-    });
+    } catch (IllegalArgumentException ignored) {
+        /*
+         * Se não for uma URL válida, mantém o path
+         * original recebido.
+         */
+    }
+
+    int queryIndex = value.indexOf('?');
+
+    if (queryIndex >= 0) {
+        value = value.substring(0, queryIndex);
+    }
+
+    int fragmentIndex = value.indexOf('#');
+
+    if (fragmentIndex >= 0) {
+        value = value.substring(0, fragmentIndex);
+    }
+
+    return value
+        .replace('\\', '/')
+        .replaceAll("/+$", "")
+        .toLowerCase();
+}
+
+private boolean cacheFileMatches(
+    Path cacheFile,
+    String expectedMethod,
+    String expectedPathOrUrl
+) {
+    try {
+        String content = Files.readString(
+            cacheFile,
+            StandardCharsets.UTF_8
+        );
+
+        JsonElement parsed =
+            JsonParser.parseString(content);
+
+        JsonObject pathObject =
+            extractCachePathObject(parsed);
+
+        String cacheMethod =
+            pathObject.has("method")
+                ? pathObject.get("method").getAsString()
+                : "";
+
+        String cacheUrl;
+
+        if (pathObject.has("url")) {
+            cacheUrl =
+                pathObject.get("url").getAsString();
+        } else if (pathObject.has("path")) {
+            cacheUrl =
+                pathObject.get("path").getAsString();
+        } else {
+            cacheUrl = "";
+        }
+
+        boolean sameMethod =
+            normalizeCacheMethod(cacheMethod)
+                .equals(
+                    normalizeCacheMethod(expectedMethod)
+                );
+
+        boolean samePath =
+            normalizeCachePath(cacheUrl)
+                .equals(
+                    normalizeCachePath(expectedPathOrUrl)
+                );
+
+        return sameMethod && samePath;
+
+    } catch (Exception ignored) {
+        /*
+         * Um JSON inválido não deve interromper
+         * a busca pelos outros arquivos.
+         */
+        return false;
+    }
+}
+
+private JsonObject extractCachePathObject(
+    JsonElement parsed
+) {
+    if (parsed == null || parsed.isJsonNull()) {
+        return new JsonObject();
+    }
+
+    JsonObject entry = null;
+
+    if (parsed.isJsonArray()) {
+        JsonArray array = parsed.getAsJsonArray();
+
+        if (
+            array.size() > 0
+                && array.get(0).isJsonObject()
+        ) {
+            entry =
+                array.get(0).getAsJsonObject();
+        }
+    } else if (parsed.isJsonObject()) {
+        entry = parsed.getAsJsonObject();
+    }
+
+    if (entry == null) {
+        return new JsonObject();
+    }
+
+    if (
+        entry.has("path")
+            && entry.get("path").isJsonObject()
+    ) {
+        return entry.getAsJsonObject("path");
+    }
+
+    return entry;
 }
