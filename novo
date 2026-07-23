@@ -1,164 +1,244 @@
-Corrija o trecho do handleLoadYamlConfig()
+private void handleLoadCacheJson(JsonElement payload) {
+    ApplicationManager.getApplication().invokeLater(() -> {
+        try {
+            if (payload == null || !payload.isJsonObject()) {
+                return;
+            }
 
-Logo depois de:
+            JsonObject data = payload.getAsJsonObject();
 
-OrchestratorResult result =
-    Orchestrator.run(finalYamlPath, projectRoot);
+            String method = data.has("method")
+                ? data.get("method").getAsString()
+                : "";
 
-deixe assim:
+            String path = data.has("path")
+                ? data.get("path").getAsString()
+                : "";
 
-currentFeatureFile = Path.of(
-    projectRoot,
-    result.getFeaturePath()
-).toString();
+            String operationId = data.has("operationId")
+                ? data.get("operationId").getAsString()
+                : "";
 
-JsonArray endpointsArr = new JsonArray();
+            String nodeId = data.has("nodeId")
+                ? data.get("nodeId").getAsString()
+                : "";
 
-/*
- * Limpa os endpoints do Swagger anteriormente carregado.
- * Deve ficar antes do for, nunca dentro dele.
- */
-swaggerEndpointsByOperationId.clear();
+            /*
+             * Corrige method e path utilizando os dados reais
+             * carregados do Swagger.
+             */
+            SwaggerEndpointInfo swaggerEndpoint =
+                swaggerEndpointsByOperationId.get(
+                    normalizeOperationId(operationId)
+                );
 
-for (SwaggerEndpoint ep : result.getEndpoints()) {
+            if (swaggerEndpoint != null) {
+                if (
+                    swaggerEndpoint.method != null
+                        && !swaggerEndpoint.method.isBlank()
+                ) {
+                    method = swaggerEndpoint.method;
+                }
 
-    String operationId = ep.getOperationId();
-    String method = ep.getMethod();
-    String path = ep.getPath();
+                if (
+                    swaggerEndpoint.path != null
+                        && !swaggerEndpoint.path.isBlank()
+                ) {
+                    path = swaggerEndpoint.path;
+                }
+            }
 
-    JsonObject obj = new JsonObject();
+            String projectRoot = project.getBasePath();
 
-    obj.addProperty(
-        "operationId",
-        operationId
-    );
+            if (projectRoot == null) {
+                return;
+            }
 
-    obj.addProperty(
-        "method",
-        method
-    );
+            System.out.println(
+                "[API FLOW CACHE] operationId="
+                    + operationId
+                    + " | method="
+                    + method
+                    + " | path="
+                    + path
+            );
 
-    obj.addProperty(
-        "path",
-        path
-    );
+            /*
+             * A busca agora usa somente método e path reais.
+             * O operationId não participa da montagem do nome.
+             */
+            Path cacheFile = findCacheFile(
+                projectRoot,
+                method,
+                path
+            );
 
-    obj.addProperty(
-        "summary",
-        ep.getSummary()
-    );
+            /*
+             * Cache não encontrado.
+             */
+            if (
+                cacheFile == null
+                    || !Files.exists(cacheFile)
+            ) {
+                System.out.println(
+                    "[API FLOW CACHE] Cache não encontrado para: "
+                        + method
+                        + " "
+                        + path
+                );
 
-    /*
-     * Salva o relacionamento:
-     *
-     * operationId -> método e rota reais do Swagger
-     */
-    if (
-        operationId != null
-            && !operationId.isBlank()
-            && method != null
-            && !method.isBlank()
-            && path != null
-            && !path.isBlank()
-    ) {
-        swaggerEndpointsByOperationId.put(
-            normalizeOperationId(operationId),
-            new SwaggerEndpointInfo(
-                method.trim().toUpperCase(),
-                path.trim()
-            )
-        );
-    }
+                JsonObject resp = new JsonObject();
 
-    endpointsArr.add(obj);
+                resp.addProperty(
+                    "operationId",
+                    operationId
+                );
+
+                resp.addProperty(
+                    "nodeId",
+                    nodeId
+                );
+
+                resp.addProperty(
+                    "found",
+                    false
+                );
+
+                resp.addProperty(
+                    "cacheFilePath",
+                    ""
+                );
+
+                resp.add(
+                    "cacheData",
+                    new JsonObject()
+                );
+
+                sendToJs(
+                    "{ type: 'cacheJsonLoaded', payload: "
+                        + resp
+                        + " }"
+                );
+
+                return;
+            }
+
+            System.out.println(
+                "[API FLOW CACHE] Cache encontrado: "
+                    + cacheFile
+            );
+
+            String content = Files.readString(
+                cacheFile,
+                StandardCharsets.UTF_8
+            );
+
+            JsonElement parsed =
+                JsonParser.parseString(content);
+
+            JsonObject pathObj = new JsonObject();
+
+            /*
+             * Formato mais comum:
+             *
+             * [
+             *   {
+             *     "task": "...",
+             *     "path": {
+             *       "method": "get",
+             *       "url": "..."
+             *     }
+             *   }
+             * ]
+             */
+            if (
+                parsed.isJsonArray()
+                    && parsed.getAsJsonArray().size() > 0
+            ) {
+                JsonElement firstElement =
+                    parsed.getAsJsonArray().get(0);
+
+                if (firstElement.isJsonObject()) {
+                    JsonObject entry =
+                        firstElement.getAsJsonObject();
+
+                    if (
+                        entry.has("path")
+                            && entry.get("path").isJsonObject()
+                    ) {
+                        pathObj =
+                            entry.getAsJsonObject("path");
+                    } else {
+                        /*
+                         * Fallback caso o próprio objeto já seja
+                         * o conteúdo do cache.
+                         */
+                        pathObj = entry;
+                    }
+                }
+            }
+
+            /*
+             * Também aceita cache salvo como objeto simples,
+             * sem o array externo.
+             */
+            else if (parsed.isJsonObject()) {
+                JsonObject entry =
+                    parsed.getAsJsonObject();
+
+                if (
+                    entry.has("path")
+                        && entry.get("path").isJsonObject()
+                ) {
+                    pathObj =
+                        entry.getAsJsonObject("path");
+                } else {
+                    pathObj = entry;
+                }
+            }
+
+            JsonObject resp = new JsonObject();
+
+            resp.addProperty(
+                "operationId",
+                operationId
+            );
+
+            resp.addProperty(
+                "nodeId",
+                nodeId
+            );
+
+            resp.addProperty(
+                "found",
+                true
+            );
+
+            resp.addProperty(
+                "cacheFilePath",
+                cacheFile.toString()
+            );
+
+            resp.add(
+                "cacheData",
+                pathObj
+            );
+
+            sendToJs(
+                "{ type: 'cacheJsonLoaded', payload: "
+                    + resp
+                    + " }"
+            );
+
+        } catch (Exception e) {
+            e.printStackTrace();
+
+            Messages.showErrorDialog(
+                project,
+                "Erro ao ler cache: "
+                    + e.getMessage(),
+                "BEX Automation Flow"
+            );
+        }
+    });
 }
-Onde colocar o clear()
-
-Coloque exatamente antes do for:
-
-swaggerEndpointsByOperationId.clear();
-
-for (SwaggerEndpoint ep : result.getEndpoints()) {
-
-Não coloque:
-
-dentro do for;
-no handlePickFeatureFile();
-depois de preencher o mapa.
-
-Se colocar dentro do for, a cada endpoint o mapa será apagado e sobrará apenas o último.
-
-Como fica o trecho principal
-
-A sequência correta é:
-
-OrchestratorResult result =
-    Orchestrator.run(finalYamlPath, projectRoot);
-
-currentFeatureFile = Path.of(
-    projectRoot,
-    result.getFeaturePath()
-).toString();
-
-JsonArray endpointsArr = new JsonArray();
-
-swaggerEndpointsByOperationId.clear();
-
-for (SwaggerEndpoint ep : result.getEndpoints()) {
-    String operationId = ep.getOperationId();
-    String method = ep.getMethod();
-    String path = ep.getPath();
-
-    // Monta o JSON para a tela.
-
-    // Também preenche o mapa para uso posterior.
-}
-Depois, no handlePickFeatureFile()
-
-No método mostrado anteriormente, você tem:
-
-List<FeatureParser.ApiEndpoint> eps =
-    FeatureParser.parseFeatureFile(currentFeatureFile);
-
-String suite =
-    FeatureParser.extractSuiteName(currentFeatureFile);
-
-for (FeatureParser.ApiEndpoint ep : eps) {
-    enrichEndpointFromCache(projectRoot, ep);
-}
-
-Troque o for por:
-
-for (FeatureParser.ApiEndpoint ep : eps) {
-
-    SwaggerEndpointInfo swaggerEndpoint =
-        swaggerEndpointsByOperationId.get(
-            normalizeOperationId(ep.operationId)
-        );
-
-    if (swaggerEndpoint != null) {
-        ep.method = swaggerEndpoint.method;
-        ep.path = swaggerEndpoint.path;
-    }
-
-    System.out.println(
-        "[API FLOW] operationId=" + ep.operationId
-            + " | method=" + ep.method
-            + " | path=" + ep.path
-    );
-
-    enrichEndpointFromCache(projectRoot, ep);
-}
-
-A ordem é essencial:
-
-1. FeatureParser cria o endpoint
-2. Swagger corrige method e path
-3. enrichEndpointFromCache procura o cache
-4. Endpoint é enviado ao JavaScript
-
-Para buscarHierarquiasVigentes, o terminal deverá mostrar:
-
-[API FLOW] operationId=buscarHierarquiasVigentes
-| method=GET
-| path=/api/v1/vigente
