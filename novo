@@ -1,390 +1,88 @@
-package com.bradesco.apiflow.core;
+Corrija a linha 262
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+Troque:
 
-public class FeatureParser {
+for (String[] g : ep.fieldGets) {
 
-    private static final Pattern HEADER_PATTERN = Pattern.compile(
-        "operationId|status_code|summary",
-        Pattern.CASE_INSENSITIVE
-    );
+por:
 
-    private static final Pattern STEP_PATTERN = Pattern.compile(
-        "^\\s*When\\s+executo\\s+os?\\s+summary\\s+(.+)$",
-        Pattern.CASE_INSENSITIVE
-    );
+for (FeatureParser.FieldGet g : ep.fieldGets) {
 
-    private static final Pattern CAPTURE_FIELDS_PATTERN = Pattern.compile(
-        "^(When|Then|And|E|Entao|Então|But|\\*)\\s+"
-            + "capturo\\s+vari[aá]veis"
-            + "(?:\\s+da\\s+suite\\s+[^:]+)?\\s*:\\s*$",
-        Pattern.CASE_INSENSITIVE
-    );
+Dentro desse bloco, substitua:
 
-    private static final Pattern INJECT_FIELDS_PATTERN = Pattern.compile(
-        "^(When|Then|And|E|Entao|Então|But|\\*)\\s+"
-            + "injeto\\s+vari[aá]veis"
-            + "(?:\\s+da\\s+suite\\s+[^:]+)?\\s*:\\s*$",
-        Pattern.CASE_INSENSITIVE
-    );
+g[0]
 
-    private static final String TARGET_TAG = "@test_integrated";
+por:
 
-    private static final List<String> HTTP_METHODS = Arrays.asList(
-        "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"
-    );
+g.nameVar
 
-    public static class FieldGet {
-        public String nameVar;
-        public String expr;
+E substitua:
 
-        public FieldGet(String nameVar, String expr) {
-            this.nameVar = nameVar;
-            this.expr = expr;
-        }
-    }
+g[1]
 
-    public static class FieldSet {
-        public String pathExpr;
-        public String value;
-        public String before;
-        public String beforeEndpoint;
+por:
 
-        public FieldSet(String pathExpr, String value, String before, String beforeEndpoint) {
-            this.pathExpr = pathExpr;
-            this.value = value;
-            this.before = before;
-            this.beforeEndpoint = beforeEndpoint;
-        }
-    }
+g.expr
 
-    public static class ApiEndpoint {
-        public String id;
-        public String method;
-        public String path;
-        public String operationId;
-        public String statusCode;
-        public String suite;
-        public List<String[]> responseAttributes = new ArrayList<>();
-        public List<FieldGet> fieldGets = new ArrayList<>();
-        public List<FieldSet> fieldSets = new ArrayList<>();
+Exemplo:
 
-        public ApiEndpoint(String id, String method, String path, String operationId,
-                           String statusCode, String suite) {
-            this.id = id;
-            this.method = method;
-            this.path = path;
-            this.operationId = operationId;
-            this.statusCode = statusCode;
-            this.suite = suite;
-        }
-    }
+for (FeatureParser.FieldGet g : ep.fieldGets) {
+    Map<String, Object> fieldGet = new LinkedHashMap<>();
 
-    public static List<ApiEndpoint> parseFeatureFile(String filePath) throws IOException {
-        String content = Files.readString(Path.of(filePath), StandardCharsets.UTF_8);
-        String suite = extractSuiteName(filePath);
-        return parseContent(content, suite);
-    }
+    fieldGet.put("nameVar", g.nameVar != null ? g.nameVar : "");
+    fieldGet.put("expr", g.expr != null ? g.expr : "");
 
-    public static List<ApiEndpoint> parseContent(String content, String suite) {
-        Map<String, ApiEndpoint> byOpId = new LinkedHashMap<>();
-        String[] lines = content.split("\\R");
-
-        boolean inTargetScenario = false;
-        boolean inDataTable = false;
-        boolean headerPassed = false;
-        int fieldTableMode = 0;
-        boolean fieldHeaderPassed = false;
-        List<String> fieldHeader = new ArrayList<>();
-        List<Map<String, String>> captureRaw = new ArrayList<>();
-        List<Map<String, String>> injectionRaw = new ArrayList<>();
-        int colOpId = -1;
-        int colStatus = -1;
-        int colObjeto = -1;
-        int colValor = -1;
-        List<String> pendingTags = new ArrayList<>();
-
-        for (String rawLine : lines) {
-            String trimmed = rawLine.trim();
-
-            if (trimmed.startsWith("@")) {
-                pendingTags.add(trimmed);
-                continue;
-            }
-
-            if (trimmed.matches("(?i)^(Scenario|Cenario|Cenário):\\s*.*")) {
-                inTargetScenario = pendingTags.stream().anyMatch(tag -> tag.contains(TARGET_TAG));
-                pendingTags.clear();
-                inDataTable = false;
-                headerPassed = false;
-                fieldTableMode = 0;
-                fieldHeaderPassed = false;
-                fieldHeader.clear();
-                colOpId = colStatus = colObjeto = colValor = -1;
-                continue;
-            }
-
-            if (trimmed.matches("(?i)^(Scenario Outline|Esquema do Cenario|Esquema do Cenário|Feature|Funcionalidade|Background|Contexto):.*")) {
-                inTargetScenario = false;
-                pendingTags.clear();
-                inDataTable = false;
-                headerPassed = false;
-                fieldTableMode = 0;
-                fieldHeaderPassed = false;
-                fieldHeader.clear();
-                continue;
-            }
-
-            if (!inTargetScenario) continue;
-
-            boolean isTableRow = trimmed.startsWith("|");
-
-            if (fieldTableMode > 0 && !isTableRow) {
-                fieldTableMode = 0;
-                fieldHeaderPassed = false;
-                fieldHeader.clear();
-            }
-
-            if (inDataTable && !isTableRow) {
-                inDataTable = false;
-                headerPassed = false;
-                colOpId = colStatus = colObjeto = colValor = -1;
-            }
-
-            if (trimmed.contains("com os arquivos:") || trimmed.matches("(?i)^Examples:.*")) {
-                inDataTable = true;
-                headerPassed = false;
-                colOpId = colStatus = colObjeto = colValor = -1;
-                continue;
-            }
-
-            if (CAPTURE_FIELDS_PATTERN.matcher(trimmed).matches()) {
-                fieldTableMode = 1;
-                fieldHeaderPassed = false;
-                fieldHeader.clear();
-                inDataTable = false;
-                headerPassed = false;
-                continue;
-            }
-
-            if (INJECT_FIELDS_PATTERN.matcher(trimmed).matches()) {
-                fieldTableMode = 2;
-                fieldHeaderPassed = false;
-                fieldHeader.clear();
-                inDataTable = false;
-                headerPassed = false;
-                continue;
-            }
-
-            if (fieldTableMode > 0 && isTableRow) {
-                String[] cells = splitCells(trimmed);
-                if (cells == null) continue;
-
-                if (!fieldHeaderPassed) {
-                    fieldHeader.clear();
-                    for (String cell : cells) fieldHeader.add(cell.toLowerCase());
-                    fieldHeaderPassed = true;
-                    continue;
-                }
-
-                Map<String, String> row = new LinkedHashMap<>();
-                int limit = Math.min(fieldHeader.size(), cells.length);
-                for (int i = 0; i < limit; i++) row.put(fieldHeader.get(i), cells[i]);
-
-                if (fieldTableMode == 1) captureRaw.add(row);
-                else injectionRaw.add(row);
-                continue;
-            }
-
-            if (inDataTable && isTableRow) {
-                String[] cells = splitCells(trimmed);
-                if (cells == null) continue;
-
-                if (!headerPassed) {
-                    if (HEADER_PATTERN.matcher(trimmed).find()) {
-                        for (int i = 0; i < cells.length; i++) {
-                            String header = cells[i].toLowerCase();
-                            if (colOpId < 0 && header.contains("operationid")) colOpId = i;
-                            else if (colStatus < 0 && header.contains("status_code")) colStatus = i;
-                            else if (colObjeto < 0 && header.equals("objeto")) colObjeto = i;
-                            else if (colValor < 0 && header.equals("valor")) colValor = i;
-                        }
-                        if (colOpId < 0) colOpId = 0;
-                        if (colStatus < 0 && cells.length > 1) colStatus = 1;
-                        headerPassed = true;
-                    }
-                    continue;
-                }
-
-                if (colOpId >= cells.length) continue;
-                String operationId = cells[colOpId];
-                if (operationId.isEmpty() || operationId.startsWith("<")) continue;
-
-                String statusCode = colStatus >= 0 && colStatus < cells.length ? cells[colStatus] : "";
-                String objeto = colObjeto >= 0 && colObjeto < cells.length ? cells[colObjeto] : "";
-                String valor = colValor >= 0 && colValor < cells.length ? cells[colValor] : "";
-
-                ApiEndpoint endpoint = byOpId.get(operationId);
-                if (endpoint == null) {
-                    String[] methodAndPath = inferMethodAndPath(operationId);
-                    endpoint = new ApiEndpoint(
-                        methodAndPath[0] + "-" + operationId,
-                        methodAndPath[0], methodAndPath[1], operationId, statusCode, suite
-                    );
-                    byOpId.put(operationId, endpoint);
-                } else if ((endpoint.statusCode == null || endpoint.statusCode.isEmpty())
-                        && statusCode != null && !statusCode.isEmpty() && !statusCode.startsWith("<")) {
-                    endpoint.statusCode = statusCode;
-                }
-
-                boolean isPlaceholder = (objeto.startsWith("<") && objeto.endsWith(">"))
-                    || (valor.startsWith("<") && valor.endsWith(">"));
-                if (!isPlaceholder && (!objeto.isEmpty() || !valor.isEmpty())) {
-                    endpoint.responseAttributes.add(new String[]{objeto, valor});
-                }
-                continue;
-            }
-
-            Matcher stepMatcher = STEP_PATTERN.matcher(trimmed);
-            if (stepMatcher.find()) {
-                String operationId = stepMatcher.group(1).trim();
-                if (operationId.startsWith("<") || byOpId.containsKey(operationId)) continue;
-                String[] methodAndPath = inferMethodAndPath(operationId);
-                byOpId.put(operationId, new ApiEndpoint(
-                    methodAndPath[0] + "-" + operationId,
-                    methodAndPath[0], methodAndPath[1], operationId, "", suite
-                ));
-            }
-        }
-
-        attachFieldRows(byOpId, captureRaw, injectionRaw);
-        return new ArrayList<>(byOpId.values());
-    }
-
-    private static String[] splitCells(String trimmed) {
-        String[] rawParts = trimmed.split("\\|", -1);
-        int firstCell = 1;
-        int lastCell = rawParts.length - 1;
-        if (lastCell >= firstCell && rawParts[lastCell].trim().isEmpty()) lastCell--;
-        if (lastCell < firstCell) return null;
-        String[] cells = new String[lastCell - firstCell + 1];
-        for (int i = 0; i < cells.length; i++) cells[i] = rawParts[firstCell + i].trim();
-        return cells;
-    }
-
-    private static void attachFieldRows(Map<String, ApiEndpoint> byOpId,
-                                        List<Map<String, String>> captureRaw,
-                                        List<Map<String, String>> injectionRaw) {
-        for (Map<String, String> row : captureRaw) {
-            String pathKey = firstNonEmpty(row, "getfieldresponse_pathkey", "pathkey");
-            String nameVar = firstNonEmpty(row, "name_var", "namevar");
-            String expr = firstNonEmpty(row, "getfieldresponse_expr", "expr");
-            if (nameVar.isEmpty() && expr.isEmpty()) continue;
-            ApiEndpoint endpoint = findEndpointByPathKey(byOpId, pathKey);
-            if (endpoint != null) endpoint.fieldGets.add(new FieldGet(nameVar, expr));
-        }
-
-        for (Map<String, String> row : injectionRaw) {
-            String pathKey = firstNonEmpty(row, "setfieldrequest_pathkey", "pathkey");
-            String pathExpr = firstNonEmpty(row, "setfieldrequest_pathexpr", "pathexpr");
-            String value = firstNonEmpty(row, "setfieldrequest_value", "value");
-            String before = firstNonEmpty(row, "before", "before_");
-            String beforeEndpoint = firstNonEmpty(row, "before_endpoint", "beforeendpoint");
-            if (pathExpr.isEmpty() && value.isEmpty()) continue;
-            ApiEndpoint endpoint = findEndpointByPathKey(byOpId, pathKey);
-            if (endpoint != null) {
-                endpoint.fieldSets.add(new FieldSet(pathExpr, value, before, beforeEndpoint));
-            }
-        }
-    }
-
-    private static String firstNonEmpty(Map<String, String> row, String... keys) {
-        for (String key : keys) {
-            String value = row.get(key);
-            if (value != null && !value.trim().isEmpty()) return value.trim();
-        }
-        return "";
-    }
-
-    private static ApiEndpoint findEndpointByPathKey(Map<String, ApiEndpoint> byOpId, String pathKey) {
-        if (pathKey == null || pathKey.isEmpty()) return null;
-        String normalizedPathKey = normalizeKey(pathKey);
-
-        for (ApiEndpoint endpoint : byOpId.values()) {
-            if (normalizeKey(endpoint.operationId).equals(normalizedPathKey)) return endpoint;
-        }
-
-        for (ApiEndpoint endpoint : byOpId.values()) {
-            String normalizedOperationId = normalizeKey(endpoint.operationId);
-            if (!normalizedPathKey.isEmpty()
-                && (normalizedOperationId.contains(normalizedPathKey)
-                    || normalizedPathKey.contains(normalizedOperationId))) {
-                return endpoint;
-            }
-        }
-        return null;
-    }
-
-    private static String normalizeKey(String value) {
-        if (value == null) return "";
-        return value.toLowerCase()
-            .replaceAll("\\{[^}]*}", "")
-            .replaceAll("[^a-z0-9]+", "_")
-            .replaceAll("^_+|_+$", "");
-    }
-
-    public static String[] inferMethodAndPath(String operationId) {
-        Pattern explicit = Pattern.compile(
-            "^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\\s+(.+)$",
-            Pattern.CASE_INSENSITIVE
-        );
-        Matcher matcher = explicit.matcher(operationId);
-        if (matcher.matches()) {
-            String path = matcher.group(2);
-            if (!path.startsWith("/")) path = "/" + path;
-            return new String[]{matcher.group(1).toUpperCase(), path};
-        }
-
-        if (operationId.startsWith("/")) return new String[]{"POST", operationId};
-
-        for (String method : HTTP_METHODS) {
-            String prefix = method.toLowerCase() + "_";
-            if (operationId.toLowerCase().startsWith(prefix)
-                && operationId.length() > prefix.length()) {
-                String pathPart = "/" + operationId.substring(prefix.length()).replace("__", "/");
-                return new String[]{method, pathPart};
-            }
-        }
-
-        for (String method : HTTP_METHODS) {
-            if (operationId.toLowerCase().startsWith(method.toLowerCase())) {
-                String rest = operationId.substring(method.length());
-                if (!rest.isEmpty() && Character.isUpperCase(rest.charAt(0))) {
-                    String pathPart = rest.replaceAll("([A-Z])", "/$1").toLowerCase();
-                    return new String[]{method, pathPart};
-                }
-            }
-        }
-
-        String pathFromId = "/" + operationId
-            .replaceAll("([A-Z])", "/$1")
-            .toLowerCase()
-            .replaceAll("^/+", "");
-        return new String[]{"POST", "/" + pathFromId.replaceAll("^/+", "")};
-    }
-
-    public static String extractSuiteName(String filePath) {
-        Path parent = Path.of(filePath).getParent();
-        return parent != null ? parent.getFileName().toString() : "default";
-    }
+    fieldGets.add(fieldGet);
 }
+
+Use o nome da sua lista atual no lugar de fieldGets, caso seja diferente.
+
+Corrija a linha 273
+
+Troque:
+
+for (String[] s : ep.fieldSets) {
+
+por:
+
+for (FeatureParser.FieldSet s : ep.fieldSets) {
+
+Dentro desse bloco, faça as substituições:
+
+s[0] → s.pathExpr
+s[1] → s.value
+s[2] → s.before
+s[3] → s.beforeEndpoint
+
+Exemplo:
+
+for (FeatureParser.FieldSet s : ep.fieldSets) {
+    Map<String, Object> fieldSet = new LinkedHashMap<>();
+
+    fieldSet.put("pathExpr", s.pathExpr != null ? s.pathExpr : "");
+    fieldSet.put("value", s.value != null ? s.value : "");
+    fieldSet.put("before", s.before != null ? s.before : "");
+    fieldSet.put(
+        "beforeEndpoint",
+        s.beforeEndpoint != null ? s.beforeEndpoint : ""
+    );
+
+    fieldSets.add(fieldSet);
+}
+Resumo direto
+
+No FlowEditorBridge.java:
+
+for (String[] g : ep.fieldGets)
+
+vira:
+
+for (FeatureParser.FieldGet g : ep.fieldGets)
+
+E:
+
+for (String[] s : ep.fieldSets)
+
+vira:
+
+for (FeatureParser.FieldSet s : ep.fieldSets)
