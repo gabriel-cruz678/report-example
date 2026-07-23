@@ -1,160 +1,33 @@
-public static String[] inferMethodAndPath(String operationId) {
-    if (operationId == null || operationId.trim().isEmpty()) {
-        return new String[]{"", ""};
-    }
+Crie um resolvedor:
 
-    operationId = operationId.trim();
+public static String[] resolveMethodAndPath(
+    String operationId,
+    Map<String, String[]> swaggerEndpoints
+) {
+    if (swaggerEndpoints != null) {
+        String[] swaggerEndpoint =
+            swaggerEndpoints.get(operationId);
 
-    /*
-     * Formato explícito:
-     * GET /api/v1/vigente
-     */
-    Pattern explicit = Pattern.compile(
-        "^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\\s+(.+)$",
-        Pattern.CASE_INSENSITIVE
-    );
-
-    Matcher explicitMatcher = explicit.matcher(operationId);
-
-    if (explicitMatcher.matches()) {
-        String path = explicitMatcher.group(2).trim();
-
-        if (!path.startsWith("/")) {
-            path = "/" + path;
-        }
-
-        return new String[]{
-            explicitMatcher.group(1).toUpperCase(),
-            path
-        };
-    }
-
-    /*
-     * Se já recebeu diretamente uma rota.
-     */
-    if (operationId.startsWith("/")) {
-        return new String[]{"", operationId};
-    }
-
-    /*
-     * Método no início:
-     *
-     * get_api_v1_vigente
-     * post_automation_v2_command
-     */
-    for (String method : HTTP_METHODS) {
-        String prefix = method.toLowerCase() + "_";
-
-        if (operationId.toLowerCase().startsWith(prefix)) {
-            String routePart = operationId.substring(prefix.length());
-
-            String path = "/" + routePart
-                .replace("__", "/")
-                .replace("_", "/");
-
+        if (
+            swaggerEndpoint != null
+                && swaggerEndpoint.length >= 2
+        ) {
             return new String[]{
-                method,
-                path
+                swaggerEndpoint[0].toUpperCase(),
+                swaggerEndpoint[1]
             };
         }
     }
 
-    /*
-     * Método no final:
-     *
-     * createPng_automation_v2_print_get
-     * sendCommand_automation_v2_command_post
-     */
-    Pattern suffixPattern = Pattern.compile(
-        "^(.+?)_(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$",
-        Pattern.CASE_INSENSITIVE
-    );
-
-    Matcher suffixMatcher = suffixPattern.matcher(operationId);
-
-    if (suffixMatcher.matches()) {
-        String routePart = suffixMatcher.group(1);
-
-        /*
-         * Remove o nome funcional anterior ao começo conhecido da rota.
-         *
-         * createPng_automation_v2_print
-         *           ↓
-         * automation_v2_print
-         */
-        routePart = extractLikelyRoutePart(routePart);
-
-        String path = "/" + routePart
-            .replace("__", "/")
-            .replace("_", "/");
-
-        return new String[]{
-            suffixMatcher.group(2).toUpperCase(),
-            path
-        };
-    }
-
-    /*
-     * Formato camelCase começando pelo método:
-     *
-     * getHealthCheck
-     */
-    for (String method : HTTP_METHODS) {
-        if (
-            operationId.toLowerCase()
-                .startsWith(method.toLowerCase())
-        ) {
-            String rest =
-                operationId.substring(method.length());
-
-            if (
-                !rest.isEmpty()
-                    && Character.isUpperCase(rest.charAt(0))
-            ) {
-                String path = rest
-                    .replaceAll("([A-Z])", "/$1")
-                    .toLowerCase();
-
-                return new String[]{
-                    method,
-                    path
-                };
-            }
-        }
-    }
-
-    /*
-     * Não inventa mais POST.
-     *
-     * Para operationId personalizado, método e rota precisam
-     * vir obrigatoriamente do Swagger.
-     */
-    return new String[]{"", ""};
+    return inferMethodAndPath(operationId);
 }
 
-private static String extractLikelyRoutePart(String value) {
-    String lower = value.toLowerCase();
+E onde atualmente existe:
 
-    String[] commonRouteStarts = {
-        "automation_",
-        "api_",
-        "v1_",
-        "v2_",
-        "health_",
-        "secret_"
-    };
+String[] methodAndPath =
+    inferMethodAndPath(operationId);
 
-    int bestIndex = -1;
+deve ficar:
 
-    for (String candidate : commonRouteStarts) {
-        int index = lower.indexOf(candidate);
-
-        if (index >= 0 && (bestIndex < 0 || index < bestIndex)) {
-            bestIndex = index;
-        }
-    }
-
-    return bestIndex >= 0
-        ? value.substring(bestIndex)
-        : value;
-}
+String[] methodAndPath =
+    resolveMethodAndPath(operationId, swaggerEndpoints);
