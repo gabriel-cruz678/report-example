@@ -1,53 +1,189 @@
-Para voltar a compilar agora
+List<FeatureParser.ApiEndpoint> eps =
+    FeatureParser.parseFeatureFile(currentFeatureFile);
 
-Nas duas ocorrências, substitua por:
+for (FeatureParser.ApiEndpoint ep : eps) {
+    enrichEndpointFromCache(projectRoot, ep);
+}
 
-String[] methodAndPath =
-    inferMethodAndPath(operationId);
+O problema é que ep chega nessa função assim:
 
-Ou seja, pesquise no arquivo:
+buscarHierarquiasVigentes
+POST
+/buscar/hierarquias/vigentes
+
+Logo, enrichEndpointFromCache() procura o cache errado. A correção definitiva é aplicar os dados reais do Swagger antes de procurar o cache.
+
+1. Não passe swaggerEndpoints para o FeatureParser
+
+No FeatureParser, mantenha:
+
+String[] methodAndPath = inferMethodAndPath(operationId);
+
+As duas ocorrências que receberam:
 
 resolveMethodAndPath(operationId, swaggerEndpoints)
 
-e troque as duas ocorrências por:
+devem voltar para inferMethodAndPath(). O mapa do Swagger deve existir no FlowEditorBridge.
 
-inferMethodAndPath(operationId)
+2. Adicione um índice do Swagger no FlowEditorBridge
 
-Depois execute novamente:
+No começo da classe:
 
-.\gradlew clean build
-Por que deu erro
+private final Map<String, SwaggerEndpointInfo> swaggerEndpointsByOperationId =
+    new HashMap<>();
 
-O método foi criado para receber:
+private static class SwaggerEndpointInfo {
+    private final String method;
+    private final String path;
 
-resolveMethodAndPath(
-    operationId,
-    swaggerEndpoints
-);
+    private SwaggerEndpointInfo(String method, String path) {
+        this.method = method;
+        this.path = path;
+    }
+}
 
-Porém o código não declarou nem recebeu este mapa:
+Confirme estes imports:
 
-Map<String, String[]> swaggerEndpoints
+import java.util.HashMap;
+import java.util.Map;
 
-Por isso o compilador informa:
+Adicione também:
 
-cannot find symbol
-symbol: variable swaggerEndpoints
-location: class FeatureParser
-Importante
+private static String normalizeOperationId(String operationId) {
+    if (operationId == null) {
+        return "";
+    }
 
-Essa troca faz o projeto compilar novamente, mas ainda mantém o problema de:
+    return operationId
+        .trim()
+        .toLowerCase()
+        .replaceAll("[^a-z0-9]", "");
+}
+3. Preencha o índice durante a leitura do Swagger
 
+No método handleLoadYamlConfig(), já deve existir um ponto que percorre os endpoints carregados do Swagger e possui:
+
+operationId
+method
+path
+
+Dentro desse mesmo for, adicione:
+
+if (
+    operationId != null
+        && !operationId.isBlank()
+        && method != null
+        && !method.isBlank()
+        && path != null
+        && !path.isBlank()
+) {
+    swaggerEndpointsByOperationId.put(
+        normalizeOperationId(operationId),
+        new SwaggerEndpointInfo(
+            method.trim().toUpperCase(),
+            path.trim()
+        )
+    );
+}
+
+O mapa precisa ficar assim:
+
+buscarhierarquiasvigentes
+    → GET
+    → /api/v1/vigente
+
+É importante limpar o mapa antes de carregar outro Swagger:
+
+swaggerEndpointsByOperationId.clear();
+4. Altere exatamente o loop mostrado na sua imagem
+
+Atualmente:
+
+for (FeatureParser.ApiEndpoint ep : eps) {
+    enrichEndpointFromCache(projectRoot, ep);
+}
+
+Substitua por:
+
+for (FeatureParser.ApiEndpoint ep : eps) {
+    SwaggerEndpointInfo swaggerEndpoint =
+        swaggerEndpointsByOperationId.get(
+            normalizeOperationId(ep.operationId)
+        );
+
+    if (swaggerEndpoint != null) {
+        ep.method = swaggerEndpoint.method;
+        ep.path = swaggerEndpoint.path;
+    }
+
+    enrichEndpointFromCache(projectRoot, ep);
+}
+
+Esse é o ponto principal da correção.
+
+A execução ficará:
+
+FeatureParser:
 buscarHierarquiasVigentes
-
-ser inferido como:
-
 POST /buscar/hierarquias/vigentes
+             ↓
+Índice do Swagger corrige:
+GET /api/v1/vigente
+             ↓
+enrichEndpointFromCache procura:
+get_api_v1_vigente.json
+             ↓
+cache encontrado
+5. Garanta que o cache seja procurado pela rota real
 
-A integração definitiva com o Swagger precisa ser feita depois, passando o mapa verdadeiro do Swagger ao FeatureParser. Não basta escrever swaggerEndpoints no método sem que esse mapa seja criado e entregue pelo FlowEditorBridge.
+Dentro de enrichEndpointFromCache(), o nome procurado deve ser montado com:
 
-O erro:
+method + path
 
-getHeaderField("Location") must not be null
+e não com:
 
-é outro problema do resolvedor de versões do IntelliJ/Gradle. Os erros que estão bloqueando o compileJava agora são as duas referências inexistentes a swaggerEndpoints.
+method + operationId
+
+Adicione estes métodos auxiliares:
+
+private static String buildCacheFileName(
+    String method,
+    String pathOrUrl
+) {
+    String normalizedMethod =
+        method == null
+            ? ""
+            : method.trim().toLowerCase();
+
+    String normalizedPath = extractUrlPath(pathOrUrl)
+        .replaceAll("[^a-zA-Z0-9]+", "_")
+        .replaceAll("^_+|_+$", "")
+        .toLowerCase();
+
+    return normalizedMethod
+        + "_"
+        + normalizedPath
+        + ".json";
+}
+
+private static String extractUrlPath(String pathOrUrl) {
+    if (pathOrUrl == null || pathOrUrl.isBlank()) {
+        return "";
+    }
+
+    String value = pathOrUrl.trim();
+
+    try {
+        if (
+            value.startsWith("http://")
+                || value.startsWith("https://")
+        ) {
+            java.net.URI uri = java.net.URI.create(value);
+            return uri.getPath() == null ? "" : uri.getPath();
+        }
+    } catch (IllegalArgumentException ignored) {
+        // Usa o valor original abaixo.
+    }
+
+    return value;
+}
