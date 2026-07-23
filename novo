@@ -1,307 +1,347 @@
-A função deve começar assim:
+Correção das expressões regulares
 
-function addFieldGetRow(nameVar, expr) {
-    var list = document.getElementById('field-get-list');
-    if (!list) return;
+Adicione estas constantes no início da classe:
 
-    nameVar = nameVar || '';
-    expr = expr || '';
+private static final Pattern CAPTURE_FIELDS_PATTERN = Pattern.compile(
+    "^(When|Then|And|E|Entao|Então|But|\\*)\\s+" +
+    "capturo\\s+vari[aá]veis" +
+    "(?:\\s+da\\s+suite\\s+[^:]+)?\\s*:\\s*$",
+    Pattern.CASE_INSENSITIVE
+);
 
-    var row = document.createElement('div');
-    row.className = 'response-attr-row field-get-row';
+private static final Pattern INJECT_FIELDS_PATTERN = Pattern.compile(
+    "^(When|Then|And|E|Entao|Então|But|\\*)\\s+" +
+    "injeto\\s+vari[aá]veis" +
+    "(?:\\s+da\\s+suite\\s+[^:]+)?\\s*:\\s*$",
+    Pattern.CASE_INSENSITIVE
+);
 
-    row.innerHTML =
-        '<input type="text" ' +
-        'class="popup-input field-get-name" ' +
-        'placeholder="name_var (ex: token)" ' +
-        'value="' + escapeHtmlAttr(nameVar) + '">' +
+Depois, substitua os dois trimmed.matches(...) por:
 
-        '<input type="text" ' +
-        'class="popup-input field-get-expr" ' +
-        'placeholder="expr (ex: access_token)" ' +
-        'value="' + escapeHtmlAttr(expr) + '">' +
-
-        '<button type="button" ' +
-        'class="btn btn-secondary response-attr-remove" ' +
-        'title="Remover">×</button>';
-
-    list.appendChild(row);
-
-    row.querySelector('.response-attr-remove')
-        .addEventListener('click', function () {
-            row.remove();
-        });
-}
-O mesmo erro existe no SET
-
-Na imagem aparece:
-
-function addFieldSetRow(pathExpr, value) {
-    pathExpr = 'teste 1618';
-    value = 'teste 1619';
-
-    // restante...
+if (CAPTURE_FIELDS_PATTERN.matcher(trimmed).matches()) {
+    fieldTableMode = 1;
+    fieldHeaderPassed = false;
+    fieldHeader.clear();
+    inDataTable = false;
+    headerPassed = false;
+    continue;
 }
 
-Essas duas linhas também devem ser removidas.
-
-Corrija para:
-
-function addFieldSetRow(pathExpr, value) {
-    var list = document.getElementById('field-set-list');
-    if (!list) return;
-
-    pathExpr = pathExpr || '';
-    value = value !== undefined && value !== null
-        ? String(value)
-        : '';
-
-    var row = document.createElement('div');
-    row.className = 'field-set-row';
-
-    row.innerHTML =
-        '<input type="text" ' +
-        'class="popup-input field-set-pathexpr" ' +
-        'placeholder="Pathexpr (ex: payload.username)" ' +
-        'value="' + escapeHtmlAttr(pathExpr) + '">' +
-
-        '<input type="text" ' +
-        'class="popup-input field-set-value" ' +
-        'placeholder="Value (ex: {{token}})" ' +
-        'value="' + escapeHtmlAttr(value) + '">' +
-
-        '<button type="button" ' +
-        'class="btn btn-secondary response-attr-remove" ' +
-        'title="Remover">×</button>';
-
-    list.appendChild(row);
-
-    row.querySelector('.response-attr-remove')
-        .addEventListener('click', function () {
-            row.remove();
-        });
+if (INJECT_FIELDS_PATTERN.matcher(trimmed).matches()) {
+    fieldTableMode = 2;
+    fieldHeaderPassed = false;
+    fieldHeader.clear();
+    inDataTable = false;
+    headerPassed = false;
+    continue;
 }
 
-Esse é o primeiro erro concreto que impede os valores corretos de aparecerem.
+Isso aceitará tanto:
 
-O segundo ponto é o formato enviado para o JavaScript
+When capturo variaveis:
 
-O flowEditor.js procura exatamente estas propriedades:
+quanto:
 
-endpoint.fieldGets
-endpoint.fieldSets
+When capturo variaveis da suite mf:
 
-E espera exatamente estes formatos:
+E também:
 
-fieldGets: [
-  {
-    nameVar: "token",
-    expr: "access_token"
-  }
-]
-fieldSets: [
-  {
-    pathExpr: "payload.username",
-    value: "i447408"
-  }
-]
+Then injeto variáveis da suite outraSuite:
+2. O Java produz arrays, mas o JavaScript espera objetos
 
-Se o código Java estiver enviando algo como:
+No Java você declarou:
+
+public List<String[]> fieldGets = new ArrayList<>();
+public List<String[]> fieldSets = new ArrayList<>();
+
+E adiciona assim:
+
+ep.fieldGets.add(new String[]{nameVar, expr});
+ep.fieldSets.add(
+    new String[]{pathExpr, value, before, beforeEndpoint}
+);
+
+Isso será convertido para JSON aproximadamente assim:
 
 {
-  "name_var": "token",
-  "getFieldResponse_expr": "access_token"
+  "fieldGets": [
+    ["token", "access_token"]
+  ],
+  "fieldSets": [
+    ["payload.username", "", "", ""]
+  ]
 }
 
-o frontend não reconhecerá diretamente.
+Porém o flowEditor.js procura propriedades:
 
-Também não reconhecerá:
+g.nameVar
+g.expr
+
+e:
+
+s.pathExpr
+s.value
+
+Um array não possui essas propriedades. Portanto:
+
+g.nameVar
+
+retorna undefined.
+
+Esse é o segundo problema principal.
+
+Correção recomendada: usar classes no Java
+
+Dentro de FeatureParser, crie:
+
+public static class FieldGet {
+    public String nameVar;
+    public String expr;
+
+    public FieldGet(String nameVar, String expr) {
+        this.nameVar = nameVar;
+        this.expr = expr;
+    }
+}
+
+public static class FieldSet {
+    public String pathExpr;
+    public String value;
+    public String before;
+    public String beforeEndpoint;
+
+    public FieldSet(
+        String pathExpr,
+        String value,
+        String before,
+        String beforeEndpoint
+    ) {
+        this.pathExpr = pathExpr;
+        this.value = value;
+        this.before = before;
+        this.beforeEndpoint = beforeEndpoint;
+    }
+}
+
+Altere o ApiEndpoint:
+
+public List<FieldGet> fieldGets = new ArrayList<>();
+public List<FieldSet> fieldSets = new ArrayList<>();
+
+No método attachFieldRows, altere o GET:
+
+if (ep != null) {
+    ep.fieldGets.add(new FieldGet(nameVar, expr));
+}
+
+E altere o SET:
+
+if (ep != null) {
+    ep.fieldSets.add(
+        new FieldSet(
+            pathExpr,
+            value,
+            before,
+            beforeEndpoint
+        )
+    );
+}
+
+Agora o JSON ficará no formato esperado pelo JavaScript:
 
 {
-  "fieldGet": []
+  "fieldGets": [
+    {
+      "nameVar": "token",
+      "expr": "access_token"
+    }
+  ],
+  "fieldSets": [
+    {
+      "pathExpr": "payload.username",
+      "value": "",
+      "before": "",
+      "beforeEndpoint": ""
+    }
+  ]
+}
+3. Há um terceiro erro ao finalizar uma tabela
+
+No código atual existe uma estrutura semelhante a:
+
+if (fieldTableMode > 0) {
+    if (trimmed.startsWith("|")) {
+        // processa tabela
+    } else if (!trimmed.isEmpty()) {
+        fieldTableMode = 0;
+        fieldHeaderPassed = false;
+    }
 }
 
-porque o frontend espera:
+Depois da tabela SET, a próxima linha é:
 
-{
-  "fieldGets": []
+Then executo os summary da suite mf com os arquivos:
+
+Essa linha serve apenas para encerrar fieldTableMode, mas não volta a ser processada como início da tabela de summaries.
+
+Ou seja, depois que corrigir o reconhecimento de GET/SET, você poderá começar a perder a tabela seguinte.
+
+A correção é encerrar o modo de tabela antes de verificar os novos steps.
+
+No começo do processamento de cada linha, depois das verificações de cenário, coloque:
+
+boolean tableRow = trimmed.startsWith("|");
+
+if (fieldTableMode > 0 && !tableRow) {
+    fieldTableMode = 0;
+    fieldHeaderPassed = false;
+    fieldHeader.clear();
 }
 
-O mesmo vale para fieldSets.
+if (inDataTable && !tableRow) {
+    inDataTable = false;
+    headerPassed = false;
+    colOpId = -1;
+    colStatus = -1;
+    colObjeto = -1;
+    colValor = -1;
+}
 
-Conversão correta das tabelas
+Depois disso, faça as verificações:
 
-O parser do .feature deve fazer esta conversão:
+if (
+    trimmed.contains("com os arquivos:")
+    || trimmed.matches("(?i)^Examples:.*")
+) {
+    inDataTable = true;
+    headerPassed = false;
+    colOpId = -1;
+    colStatus = -1;
+    colObjeto = -1;
+    colValor = -1;
+    continue;
+}
 
-Tabela capturo variaveis
+if (CAPTURE_FIELDS_PATTERN.matcher(trimmed).matches()) {
+    fieldTableMode = 1;
+    fieldHeaderPassed = false;
+    fieldHeader.clear();
+    continue;
+}
 
-Entrada:
+if (INJECT_FIELDS_PATTERN.matcher(trimmed).matches()) {
+    fieldTableMode = 2;
+    fieldHeaderPassed = false;
+    fieldHeader.clear();
+    continue;
+}
+
+Assim, a linha posterior à tabela não será descartada.
+
+4. As colunas do seu .feature já são compatíveis
+
+O método attachFieldRows procura:
+
+"getfieldresponse_pathkey"
+"name_var"
+"getfieldresponse_expr"
+
+Como os cabeçalhos são convertidos para minúsculo:
+
+fieldHeader.add(c.toLowerCase());
+
+Estes cabeçalhos:
 
 name_var
 getFieldResponse_method
 getFieldResponse_pathkey
 getFieldResponse_expr
 
-Saída:
+viram:
 
-{
-    operationId: row.getFieldResponse_pathkey.trim(),
-    method: row.getFieldResponse_method.trim().toLowerCase(),
-    fieldGet: {
-        nameVar: row.name_var.trim(),
-        expr: row.getFieldResponse_expr.trim()
-    }
-}
-Tabela injeto variaveis
+name_var
+getfieldresponse_method
+getfieldresponse_pathkey
+getfieldresponse_expr
 
-Entrada:
+Portanto, essa parte está correta.
 
-setFieldRequest_method
+Para SET também está correto:
+
 setFieldRequest_pathkey
 setFieldRequest_pathexpr
 setFieldRequest_value
 
-Saída:
+vira:
 
-{
-    operationId: row.setFieldRequest_pathkey.trim(),
-    method: row.setFieldRequest_method.trim().toLowerCase(),
-    fieldSet: {
-        pathExpr: row.setFieldRequest_pathexpr.trim(),
-        value: row.setFieldRequest_value.trim()
-    }
+setfieldrequest_pathkey
+setfieldrequest_pathexpr
+setfieldrequest_value
+
+e corresponde ao que o Java procura.
+
+5. O campo method atualmente é ignorado
+
+Sua tabela contém:
+
+getFieldResponse_method
+setFieldRequest_method
+
+Mas attachFieldRows() não lê essas colunas.
+
+Hoje a associação é feita somente por:
+
+findEndpointByPathkey(byOpId, pathkey)
+
+Isso pode funcionar enquanto cada operationId for único. Porém, o mais seguro seria considerar também o método.
+
+Por exemplo:
+
+String method = firstNonEmpty(
+    row,
+    "getfieldresponse_method",
+    "method"
+);
+
+E para SET:
+
+String method = firstNonEmpty(
+    row,
+    "setfieldrequest_method",
+    "method"
+);
+
+Não parece ser o motivo principal do erro atual, mas é um ponto incompleto do parser.
+
+6. Remova as strings temporárias do JavaScript
+
+Nas imagens do flowEditor.js ainda aparecem:
+
+function addFieldGetRow(nameVar, expr) {
+    nameVar = 'teste 1573 flowEditor';
+    expr = 'teste 1574 flowEditor';
+
+E:
+
+function addFieldSetRow(pathExpr, value) {
+    pathExpr = 'teste 1618';
+    value = 'teste 1619';
+
+Essas quatro atribuições precisam ser removidas. Caso contrário, mesmo com o parser corrigido, os dados serão substituídos.
+
+As funções devem iniciar assim:
+
+function addFieldGetRow(nameVar, expr) {
+    nameVar = nameVar || '';
+    expr = expr || '';
+
+    // restante da função
 }
-Exemplo de montagem dos endpoints
+function addFieldSetRow(pathExpr, value) {
+    pathExpr = pathExpr || '';
+    value = value !== undefined && value !== null
+        ? String(value)
+        : '';
 
-A lógica pode ser equivalente a esta:
-
-function applyFeatureFields(endpoints, getRows, setRows) {
-    endpoints.forEach(function (endpoint) {
-        endpoint.fieldGets = [];
-        endpoint.fieldSets = [];
-
-        getRows.forEach(function (row) {
-            var operationId = String(
-                row.getFieldResponse_pathkey || ''
-            ).trim();
-
-            if (operationId !== endpoint.operationId) {
-                return;
-            }
-
-            endpoint.fieldGets.push({
-                nameVar: String(row.name_var || '').trim(),
-                expr: String(row.getFieldResponse_expr || '').trim()
-            });
-        });
-
-        setRows.forEach(function (row) {
-            var operationId = String(
-                row.setFieldRequest_pathkey || ''
-            ).trim();
-
-            if (operationId !== endpoint.operationId) {
-                return;
-            }
-
-            endpoint.fieldSets.push({
-                pathExpr: String(
-                    row.setFieldRequest_pathexpr || ''
-                ).trim(),
-
-                value: String(
-                    row.setFieldRequest_value || ''
-                ).trim()
-            });
-        });
-    });
-
-    return endpoints;
+    // restante da função
 }
-Como deve ficar para os dois endpoints da imagem
-Autenticador
-{
-  operationId: "autenticator_automation_v2_autenticator__ambiente__post",
-
-  fieldGets: [
-    {
-      nameVar: "token",
-      expr: "access_token"
-    }
-  ],
-
-  fieldSets: [
-    {
-      pathExpr: "payload.username",
-      value: "i447408"
-    }
-  ]
-}
-Disconnect user
-{
-  operationId: "disconnectUser_automation_v2_disconnect_user_post",
-
-  fieldGets: [],
-
-  fieldSets: [
-    {
-      pathExpr: "payload",
-      value: "{{token}}"
-    }
-  ]
-}
-Outro ponto que precisa ser exato
-
-O relacionamento é feito pelo operationId. Portanto, estes valores precisam ser idênticos:
-
-getFieldResponse_pathkey
-setFieldRequest_pathkey
-endpoint.operationId
-
-Qualquer diferença impede a associação:
-
-autenticator
-authenticator
-disconnectUser
-disconnectuser
-__ambiente__
-_ambiente_
-
-Também é importante remover espaços com .trim().
-
-Diagnóstico mais provável
-
-Há pelo menos dois problemas:
-
-Erro confirmado no frontend: valores de GET e SET estão sendo sobrescritos pelas strings de teste nas funções addFieldGetRow e addFieldSetRow.
-Possível erro de integração: o parser do .feature precisa devolver os dados como fieldGets e fieldSets, usando os nomes internos nameVar, expr, pathExpr e value.
-
-A primeira alteração imediata é remover estas quatro atribuições:
-
-nameVar = 'teste 1573 flowEditor';
-expr = 'teste 1574 flowEditor';
-
-pathExpr = 'teste 1618';
-value = 'teste 1619';
-
-Depois disso, o próximo teste é imprimir antes do popup:
-
-console.log('Endpoint selecionado:', node.endpoint);
-console.log('GETS:', node.endpoint.fieldGets);
-console.log('SETS:', node.endpoint.fieldSets);
-
-O resultado correto deve ser:
-
-GETS: [
-  {
-    nameVar: "token",
-    expr: "access_token"
-  }
-]
-
-SETS: [
-  {
-    pathExpr: "payload.username",
-    value: "i447408"
-  }
-]
