@@ -1,347 +1,390 @@
-Correção das expressões regulares
+package com.bradesco.apiflow.core;
 
-Adicione estas constantes no início da classe:
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-private static final Pattern CAPTURE_FIELDS_PATTERN = Pattern.compile(
-    "^(When|Then|And|E|Entao|Então|But|\\*)\\s+" +
-    "capturo\\s+vari[aá]veis" +
-    "(?:\\s+da\\s+suite\\s+[^:]+)?\\s*:\\s*$",
-    Pattern.CASE_INSENSITIVE
-);
+public class FeatureParser {
 
-private static final Pattern INJECT_FIELDS_PATTERN = Pattern.compile(
-    "^(When|Then|And|E|Entao|Então|But|\\*)\\s+" +
-    "injeto\\s+vari[aá]veis" +
-    "(?:\\s+da\\s+suite\\s+[^:]+)?\\s*:\\s*$",
-    Pattern.CASE_INSENSITIVE
-);
-
-Depois, substitua os dois trimmed.matches(...) por:
-
-if (CAPTURE_FIELDS_PATTERN.matcher(trimmed).matches()) {
-    fieldTableMode = 1;
-    fieldHeaderPassed = false;
-    fieldHeader.clear();
-    inDataTable = false;
-    headerPassed = false;
-    continue;
-}
-
-if (INJECT_FIELDS_PATTERN.matcher(trimmed).matches()) {
-    fieldTableMode = 2;
-    fieldHeaderPassed = false;
-    fieldHeader.clear();
-    inDataTable = false;
-    headerPassed = false;
-    continue;
-}
-
-Isso aceitará tanto:
-
-When capturo variaveis:
-
-quanto:
-
-When capturo variaveis da suite mf:
-
-E também:
-
-Then injeto variáveis da suite outraSuite:
-2. O Java produz arrays, mas o JavaScript espera objetos
-
-No Java você declarou:
-
-public List<String[]> fieldGets = new ArrayList<>();
-public List<String[]> fieldSets = new ArrayList<>();
-
-E adiciona assim:
-
-ep.fieldGets.add(new String[]{nameVar, expr});
-ep.fieldSets.add(
-    new String[]{pathExpr, value, before, beforeEndpoint}
-);
-
-Isso será convertido para JSON aproximadamente assim:
-
-{
-  "fieldGets": [
-    ["token", "access_token"]
-  ],
-  "fieldSets": [
-    ["payload.username", "", "", ""]
-  ]
-}
-
-Porém o flowEditor.js procura propriedades:
-
-g.nameVar
-g.expr
-
-e:
-
-s.pathExpr
-s.value
-
-Um array não possui essas propriedades. Portanto:
-
-g.nameVar
-
-retorna undefined.
-
-Esse é o segundo problema principal.
-
-Correção recomendada: usar classes no Java
-
-Dentro de FeatureParser, crie:
-
-public static class FieldGet {
-    public String nameVar;
-    public String expr;
-
-    public FieldGet(String nameVar, String expr) {
-        this.nameVar = nameVar;
-        this.expr = expr;
-    }
-}
-
-public static class FieldSet {
-    public String pathExpr;
-    public String value;
-    public String before;
-    public String beforeEndpoint;
-
-    public FieldSet(
-        String pathExpr,
-        String value,
-        String before,
-        String beforeEndpoint
-    ) {
-        this.pathExpr = pathExpr;
-        this.value = value;
-        this.before = before;
-        this.beforeEndpoint = beforeEndpoint;
-    }
-}
-
-Altere o ApiEndpoint:
-
-public List<FieldGet> fieldGets = new ArrayList<>();
-public List<FieldSet> fieldSets = new ArrayList<>();
-
-No método attachFieldRows, altere o GET:
-
-if (ep != null) {
-    ep.fieldGets.add(new FieldGet(nameVar, expr));
-}
-
-E altere o SET:
-
-if (ep != null) {
-    ep.fieldSets.add(
-        new FieldSet(
-            pathExpr,
-            value,
-            before,
-            beforeEndpoint
-        )
+    private static final Pattern HEADER_PATTERN = Pattern.compile(
+        "operationId|status_code|summary",
+        Pattern.CASE_INSENSITIVE
     );
-}
 
-Agora o JSON ficará no formato esperado pelo JavaScript:
+    private static final Pattern STEP_PATTERN = Pattern.compile(
+        "^\\s*When\\s+executo\\s+os?\\s+summary\\s+(.+)$",
+        Pattern.CASE_INSENSITIVE
+    );
 
-{
-  "fieldGets": [
-    {
-      "nameVar": "token",
-      "expr": "access_token"
+    private static final Pattern CAPTURE_FIELDS_PATTERN = Pattern.compile(
+        "^(When|Then|And|E|Entao|Então|But|\\*)\\s+"
+            + "capturo\\s+vari[aá]veis"
+            + "(?:\\s+da\\s+suite\\s+[^:]+)?\\s*:\\s*$",
+        Pattern.CASE_INSENSITIVE
+    );
+
+    private static final Pattern INJECT_FIELDS_PATTERN = Pattern.compile(
+        "^(When|Then|And|E|Entao|Então|But|\\*)\\s+"
+            + "injeto\\s+vari[aá]veis"
+            + "(?:\\s+da\\s+suite\\s+[^:]+)?\\s*:\\s*$",
+        Pattern.CASE_INSENSITIVE
+    );
+
+    private static final String TARGET_TAG = "@test_integrated";
+
+    private static final List<String> HTTP_METHODS = Arrays.asList(
+        "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"
+    );
+
+    public static class FieldGet {
+        public String nameVar;
+        public String expr;
+
+        public FieldGet(String nameVar, String expr) {
+            this.nameVar = nameVar;
+            this.expr = expr;
+        }
     }
-  ],
-  "fieldSets": [
-    {
-      "pathExpr": "payload.username",
-      "value": "",
-      "before": "",
-      "beforeEndpoint": ""
+
+    public static class FieldSet {
+        public String pathExpr;
+        public String value;
+        public String before;
+        public String beforeEndpoint;
+
+        public FieldSet(String pathExpr, String value, String before, String beforeEndpoint) {
+            this.pathExpr = pathExpr;
+            this.value = value;
+            this.before = before;
+            this.beforeEndpoint = beforeEndpoint;
+        }
     }
-  ]
-}
-3. Há um terceiro erro ao finalizar uma tabela
 
-No código atual existe uma estrutura semelhante a:
+    public static class ApiEndpoint {
+        public String id;
+        public String method;
+        public String path;
+        public String operationId;
+        public String statusCode;
+        public String suite;
+        public List<String[]> responseAttributes = new ArrayList<>();
+        public List<FieldGet> fieldGets = new ArrayList<>();
+        public List<FieldSet> fieldSets = new ArrayList<>();
 
-if (fieldTableMode > 0) {
-    if (trimmed.startsWith("|")) {
-        // processa tabela
-    } else if (!trimmed.isEmpty()) {
-        fieldTableMode = 0;
-        fieldHeaderPassed = false;
+        public ApiEndpoint(String id, String method, String path, String operationId,
+                           String statusCode, String suite) {
+            this.id = id;
+            this.method = method;
+            this.path = path;
+            this.operationId = operationId;
+            this.statusCode = statusCode;
+            this.suite = suite;
+        }
     }
-}
 
-Depois da tabela SET, a próxima linha é:
+    public static List<ApiEndpoint> parseFeatureFile(String filePath) throws IOException {
+        String content = Files.readString(Path.of(filePath), StandardCharsets.UTF_8);
+        String suite = extractSuiteName(filePath);
+        return parseContent(content, suite);
+    }
 
-Then executo os summary da suite mf com os arquivos:
+    public static List<ApiEndpoint> parseContent(String content, String suite) {
+        Map<String, ApiEndpoint> byOpId = new LinkedHashMap<>();
+        String[] lines = content.split("\\R");
 
-Essa linha serve apenas para encerrar fieldTableMode, mas não volta a ser processada como início da tabela de summaries.
+        boolean inTargetScenario = false;
+        boolean inDataTable = false;
+        boolean headerPassed = false;
+        int fieldTableMode = 0;
+        boolean fieldHeaderPassed = false;
+        List<String> fieldHeader = new ArrayList<>();
+        List<Map<String, String>> captureRaw = new ArrayList<>();
+        List<Map<String, String>> injectionRaw = new ArrayList<>();
+        int colOpId = -1;
+        int colStatus = -1;
+        int colObjeto = -1;
+        int colValor = -1;
+        List<String> pendingTags = new ArrayList<>();
 
-Ou seja, depois que corrigir o reconhecimento de GET/SET, você poderá começar a perder a tabela seguinte.
+        for (String rawLine : lines) {
+            String trimmed = rawLine.trim();
 
-A correção é encerrar o modo de tabela antes de verificar os novos steps.
+            if (trimmed.startsWith("@")) {
+                pendingTags.add(trimmed);
+                continue;
+            }
 
-No começo do processamento de cada linha, depois das verificações de cenário, coloque:
+            if (trimmed.matches("(?i)^(Scenario|Cenario|Cenário):\\s*.*")) {
+                inTargetScenario = pendingTags.stream().anyMatch(tag -> tag.contains(TARGET_TAG));
+                pendingTags.clear();
+                inDataTable = false;
+                headerPassed = false;
+                fieldTableMode = 0;
+                fieldHeaderPassed = false;
+                fieldHeader.clear();
+                colOpId = colStatus = colObjeto = colValor = -1;
+                continue;
+            }
 
-boolean tableRow = trimmed.startsWith("|");
+            if (trimmed.matches("(?i)^(Scenario Outline|Esquema do Cenario|Esquema do Cenário|Feature|Funcionalidade|Background|Contexto):.*")) {
+                inTargetScenario = false;
+                pendingTags.clear();
+                inDataTable = false;
+                headerPassed = false;
+                fieldTableMode = 0;
+                fieldHeaderPassed = false;
+                fieldHeader.clear();
+                continue;
+            }
 
-if (fieldTableMode > 0 && !tableRow) {
-    fieldTableMode = 0;
-    fieldHeaderPassed = false;
-    fieldHeader.clear();
-}
+            if (!inTargetScenario) continue;
 
-if (inDataTable && !tableRow) {
-    inDataTable = false;
-    headerPassed = false;
-    colOpId = -1;
-    colStatus = -1;
-    colObjeto = -1;
-    colValor = -1;
-}
+            boolean isTableRow = trimmed.startsWith("|");
 
-Depois disso, faça as verificações:
+            if (fieldTableMode > 0 && !isTableRow) {
+                fieldTableMode = 0;
+                fieldHeaderPassed = false;
+                fieldHeader.clear();
+            }
 
-if (
-    trimmed.contains("com os arquivos:")
-    || trimmed.matches("(?i)^Examples:.*")
-) {
-    inDataTable = true;
-    headerPassed = false;
-    colOpId = -1;
-    colStatus = -1;
-    colObjeto = -1;
-    colValor = -1;
-    continue;
-}
+            if (inDataTable && !isTableRow) {
+                inDataTable = false;
+                headerPassed = false;
+                colOpId = colStatus = colObjeto = colValor = -1;
+            }
 
-if (CAPTURE_FIELDS_PATTERN.matcher(trimmed).matches()) {
-    fieldTableMode = 1;
-    fieldHeaderPassed = false;
-    fieldHeader.clear();
-    continue;
-}
+            if (trimmed.contains("com os arquivos:") || trimmed.matches("(?i)^Examples:.*")) {
+                inDataTable = true;
+                headerPassed = false;
+                colOpId = colStatus = colObjeto = colValor = -1;
+                continue;
+            }
 
-if (INJECT_FIELDS_PATTERN.matcher(trimmed).matches()) {
-    fieldTableMode = 2;
-    fieldHeaderPassed = false;
-    fieldHeader.clear();
-    continue;
-}
+            if (CAPTURE_FIELDS_PATTERN.matcher(trimmed).matches()) {
+                fieldTableMode = 1;
+                fieldHeaderPassed = false;
+                fieldHeader.clear();
+                inDataTable = false;
+                headerPassed = false;
+                continue;
+            }
 
-Assim, a linha posterior à tabela não será descartada.
+            if (INJECT_FIELDS_PATTERN.matcher(trimmed).matches()) {
+                fieldTableMode = 2;
+                fieldHeaderPassed = false;
+                fieldHeader.clear();
+                inDataTable = false;
+                headerPassed = false;
+                continue;
+            }
 
-4. As colunas do seu .feature já são compatíveis
+            if (fieldTableMode > 0 && isTableRow) {
+                String[] cells = splitCells(trimmed);
+                if (cells == null) continue;
 
-O método attachFieldRows procura:
+                if (!fieldHeaderPassed) {
+                    fieldHeader.clear();
+                    for (String cell : cells) fieldHeader.add(cell.toLowerCase());
+                    fieldHeaderPassed = true;
+                    continue;
+                }
 
-"getfieldresponse_pathkey"
-"name_var"
-"getfieldresponse_expr"
+                Map<String, String> row = new LinkedHashMap<>();
+                int limit = Math.min(fieldHeader.size(), cells.length);
+                for (int i = 0; i < limit; i++) row.put(fieldHeader.get(i), cells[i]);
 
-Como os cabeçalhos são convertidos para minúsculo:
+                if (fieldTableMode == 1) captureRaw.add(row);
+                else injectionRaw.add(row);
+                continue;
+            }
 
-fieldHeader.add(c.toLowerCase());
+            if (inDataTable && isTableRow) {
+                String[] cells = splitCells(trimmed);
+                if (cells == null) continue;
 
-Estes cabeçalhos:
+                if (!headerPassed) {
+                    if (HEADER_PATTERN.matcher(trimmed).find()) {
+                        for (int i = 0; i < cells.length; i++) {
+                            String header = cells[i].toLowerCase();
+                            if (colOpId < 0 && header.contains("operationid")) colOpId = i;
+                            else if (colStatus < 0 && header.contains("status_code")) colStatus = i;
+                            else if (colObjeto < 0 && header.equals("objeto")) colObjeto = i;
+                            else if (colValor < 0 && header.equals("valor")) colValor = i;
+                        }
+                        if (colOpId < 0) colOpId = 0;
+                        if (colStatus < 0 && cells.length > 1) colStatus = 1;
+                        headerPassed = true;
+                    }
+                    continue;
+                }
 
-name_var
-getFieldResponse_method
-getFieldResponse_pathkey
-getFieldResponse_expr
+                if (colOpId >= cells.length) continue;
+                String operationId = cells[colOpId];
+                if (operationId.isEmpty() || operationId.startsWith("<")) continue;
 
-viram:
+                String statusCode = colStatus >= 0 && colStatus < cells.length ? cells[colStatus] : "";
+                String objeto = colObjeto >= 0 && colObjeto < cells.length ? cells[colObjeto] : "";
+                String valor = colValor >= 0 && colValor < cells.length ? cells[colValor] : "";
 
-name_var
-getfieldresponse_method
-getfieldresponse_pathkey
-getfieldresponse_expr
+                ApiEndpoint endpoint = byOpId.get(operationId);
+                if (endpoint == null) {
+                    String[] methodAndPath = inferMethodAndPath(operationId);
+                    endpoint = new ApiEndpoint(
+                        methodAndPath[0] + "-" + operationId,
+                        methodAndPath[0], methodAndPath[1], operationId, statusCode, suite
+                    );
+                    byOpId.put(operationId, endpoint);
+                } else if ((endpoint.statusCode == null || endpoint.statusCode.isEmpty())
+                        && statusCode != null && !statusCode.isEmpty() && !statusCode.startsWith("<")) {
+                    endpoint.statusCode = statusCode;
+                }
 
-Portanto, essa parte está correta.
+                boolean isPlaceholder = (objeto.startsWith("<") && objeto.endsWith(">"))
+                    || (valor.startsWith("<") && valor.endsWith(">"));
+                if (!isPlaceholder && (!objeto.isEmpty() || !valor.isEmpty())) {
+                    endpoint.responseAttributes.add(new String[]{objeto, valor});
+                }
+                continue;
+            }
 
-Para SET também está correto:
+            Matcher stepMatcher = STEP_PATTERN.matcher(trimmed);
+            if (stepMatcher.find()) {
+                String operationId = stepMatcher.group(1).trim();
+                if (operationId.startsWith("<") || byOpId.containsKey(operationId)) continue;
+                String[] methodAndPath = inferMethodAndPath(operationId);
+                byOpId.put(operationId, new ApiEndpoint(
+                    methodAndPath[0] + "-" + operationId,
+                    methodAndPath[0], methodAndPath[1], operationId, "", suite
+                ));
+            }
+        }
 
-setFieldRequest_pathkey
-setFieldRequest_pathexpr
-setFieldRequest_value
+        attachFieldRows(byOpId, captureRaw, injectionRaw);
+        return new ArrayList<>(byOpId.values());
+    }
 
-vira:
+    private static String[] splitCells(String trimmed) {
+        String[] rawParts = trimmed.split("\\|", -1);
+        int firstCell = 1;
+        int lastCell = rawParts.length - 1;
+        if (lastCell >= firstCell && rawParts[lastCell].trim().isEmpty()) lastCell--;
+        if (lastCell < firstCell) return null;
+        String[] cells = new String[lastCell - firstCell + 1];
+        for (int i = 0; i < cells.length; i++) cells[i] = rawParts[firstCell + i].trim();
+        return cells;
+    }
 
-setfieldrequest_pathkey
-setfieldrequest_pathexpr
-setfieldrequest_value
+    private static void attachFieldRows(Map<String, ApiEndpoint> byOpId,
+                                        List<Map<String, String>> captureRaw,
+                                        List<Map<String, String>> injectionRaw) {
+        for (Map<String, String> row : captureRaw) {
+            String pathKey = firstNonEmpty(row, "getfieldresponse_pathkey", "pathkey");
+            String nameVar = firstNonEmpty(row, "name_var", "namevar");
+            String expr = firstNonEmpty(row, "getfieldresponse_expr", "expr");
+            if (nameVar.isEmpty() && expr.isEmpty()) continue;
+            ApiEndpoint endpoint = findEndpointByPathKey(byOpId, pathKey);
+            if (endpoint != null) endpoint.fieldGets.add(new FieldGet(nameVar, expr));
+        }
 
-e corresponde ao que o Java procura.
+        for (Map<String, String> row : injectionRaw) {
+            String pathKey = firstNonEmpty(row, "setfieldrequest_pathkey", "pathkey");
+            String pathExpr = firstNonEmpty(row, "setfieldrequest_pathexpr", "pathexpr");
+            String value = firstNonEmpty(row, "setfieldrequest_value", "value");
+            String before = firstNonEmpty(row, "before", "before_");
+            String beforeEndpoint = firstNonEmpty(row, "before_endpoint", "beforeendpoint");
+            if (pathExpr.isEmpty() && value.isEmpty()) continue;
+            ApiEndpoint endpoint = findEndpointByPathKey(byOpId, pathKey);
+            if (endpoint != null) {
+                endpoint.fieldSets.add(new FieldSet(pathExpr, value, before, beforeEndpoint));
+            }
+        }
+    }
 
-5. O campo method atualmente é ignorado
+    private static String firstNonEmpty(Map<String, String> row, String... keys) {
+        for (String key : keys) {
+            String value = row.get(key);
+            if (value != null && !value.trim().isEmpty()) return value.trim();
+        }
+        return "";
+    }
 
-Sua tabela contém:
+    private static ApiEndpoint findEndpointByPathKey(Map<String, ApiEndpoint> byOpId, String pathKey) {
+        if (pathKey == null || pathKey.isEmpty()) return null;
+        String normalizedPathKey = normalizeKey(pathKey);
 
-getFieldResponse_method
-setFieldRequest_method
+        for (ApiEndpoint endpoint : byOpId.values()) {
+            if (normalizeKey(endpoint.operationId).equals(normalizedPathKey)) return endpoint;
+        }
 
-Mas attachFieldRows() não lê essas colunas.
+        for (ApiEndpoint endpoint : byOpId.values()) {
+            String normalizedOperationId = normalizeKey(endpoint.operationId);
+            if (!normalizedPathKey.isEmpty()
+                && (normalizedOperationId.contains(normalizedPathKey)
+                    || normalizedPathKey.contains(normalizedOperationId))) {
+                return endpoint;
+            }
+        }
+        return null;
+    }
 
-Hoje a associação é feita somente por:
+    private static String normalizeKey(String value) {
+        if (value == null) return "";
+        return value.toLowerCase()
+            .replaceAll("\\{[^}]*}", "")
+            .replaceAll("[^a-z0-9]+", "_")
+            .replaceAll("^_+|_+$", "");
+    }
 
-findEndpointByPathkey(byOpId, pathkey)
+    public static String[] inferMethodAndPath(String operationId) {
+        Pattern explicit = Pattern.compile(
+            "^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\\s+(.+)$",
+            Pattern.CASE_INSENSITIVE
+        );
+        Matcher matcher = explicit.matcher(operationId);
+        if (matcher.matches()) {
+            String path = matcher.group(2);
+            if (!path.startsWith("/")) path = "/" + path;
+            return new String[]{matcher.group(1).toUpperCase(), path};
+        }
 
-Isso pode funcionar enquanto cada operationId for único. Porém, o mais seguro seria considerar também o método.
+        if (operationId.startsWith("/")) return new String[]{"POST", operationId};
 
-Por exemplo:
+        for (String method : HTTP_METHODS) {
+            String prefix = method.toLowerCase() + "_";
+            if (operationId.toLowerCase().startsWith(prefix)
+                && operationId.length() > prefix.length()) {
+                String pathPart = "/" + operationId.substring(prefix.length()).replace("__", "/");
+                return new String[]{method, pathPart};
+            }
+        }
 
-String method = firstNonEmpty(
-    row,
-    "getfieldresponse_method",
-    "method"
-);
+        for (String method : HTTP_METHODS) {
+            if (operationId.toLowerCase().startsWith(method.toLowerCase())) {
+                String rest = operationId.substring(method.length());
+                if (!rest.isEmpty() && Character.isUpperCase(rest.charAt(0))) {
+                    String pathPart = rest.replaceAll("([A-Z])", "/$1").toLowerCase();
+                    return new String[]{method, pathPart};
+                }
+            }
+        }
 
-E para SET:
+        String pathFromId = "/" + operationId
+            .replaceAll("([A-Z])", "/$1")
+            .toLowerCase()
+            .replaceAll("^/+", "");
+        return new String[]{"POST", "/" + pathFromId.replaceAll("^/+", "")};
+    }
 
-String method = firstNonEmpty(
-    row,
-    "setfieldrequest_method",
-    "method"
-);
-
-Não parece ser o motivo principal do erro atual, mas é um ponto incompleto do parser.
-
-6. Remova as strings temporárias do JavaScript
-
-Nas imagens do flowEditor.js ainda aparecem:
-
-function addFieldGetRow(nameVar, expr) {
-    nameVar = 'teste 1573 flowEditor';
-    expr = 'teste 1574 flowEditor';
-
-E:
-
-function addFieldSetRow(pathExpr, value) {
-    pathExpr = 'teste 1618';
-    value = 'teste 1619';
-
-Essas quatro atribuições precisam ser removidas. Caso contrário, mesmo com o parser corrigido, os dados serão substituídos.
-
-As funções devem iniciar assim:
-
-function addFieldGetRow(nameVar, expr) {
-    nameVar = nameVar || '';
-    expr = expr || '';
-
-    // restante da função
-}
-function addFieldSetRow(pathExpr, value) {
-    pathExpr = pathExpr || '';
-    value = value !== undefined && value !== null
-        ? String(value)
-        : '';
-
-    // restante da função
+    public static String extractSuiteName(String filePath) {
+        Path parent = Path.of(filePath).getParent();
+        return parent != null ? parent.getFileName().toString() : "default";
+    }
 }
