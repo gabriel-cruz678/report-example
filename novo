@@ -24,7 +24,7 @@ private void handleLoadCacheJson(JsonElement payload) {
                 : "";
 
             /*
-             * Corrige method e path utilizando os dados reais
+             * Corrige method e path usando os dados reais
              * carregados do Swagger.
              */
             SwaggerEndpointInfo swaggerEndpoint =
@@ -50,69 +50,43 @@ private void handleLoadCacheJson(JsonElement payload) {
 
             String projectRoot = project.getBasePath();
 
-            if (projectRoot == null) {
+            if (projectRoot == null || projectRoot.isBlank()) {
                 return;
             }
 
             System.out.println(
-                "[API FLOW CACHE] operationId="
-                    + operationId
-                    + " | method="
-                    + method
-                    + " | path="
-                    + path
+                "[API FLOW CACHE] operationId=" + operationId
+                    + " | method=" + method
+                    + " | path=" + path
             );
 
             /*
-             * A busca agora usa somente método e path reais.
-             * O operationId não participa da montagem do nome.
+             * Mantemos os quatro parâmetros para não quebrar
+             * outras chamadas já existentes no projeto.
              */
             Path cacheFile = findCacheFile(
                 projectRoot,
                 method,
-                path
+                path,
+                operationId
             );
 
-            /*
-             * Cache não encontrado.
-             */
-            if (
-                cacheFile == null
-                    || !Files.exists(cacheFile)
-            ) {
+            JsonObject resp = new JsonObject();
+
+            resp.addProperty("operationId", operationId);
+            resp.addProperty("nodeId", nodeId);
+
+            if (cacheFile == null || !Files.isRegularFile(cacheFile)) {
                 System.out.println(
-                    "[API FLOW CACHE] Cache não encontrado para: "
+                    "[API FLOW CACHE] Cache não encontrado: "
                         + method
                         + " "
                         + path
                 );
 
-                JsonObject resp = new JsonObject();
-
-                resp.addProperty(
-                    "operationId",
-                    operationId
-                );
-
-                resp.addProperty(
-                    "nodeId",
-                    nodeId
-                );
-
-                resp.addProperty(
-                    "found",
-                    false
-                );
-
-                resp.addProperty(
-                    "cacheFilePath",
-                    ""
-                );
-
-                resp.add(
-                    "cacheData",
-                    new JsonObject()
-                );
+                resp.addProperty("found", false);
+                resp.addProperty("cacheFilePath", "");
+                resp.add("cacheData", new JsonObject());
 
                 sendToJs(
                     "{ type: 'cacheJsonLoaded', payload: "
@@ -133,96 +107,17 @@ private void handleLoadCacheJson(JsonElement payload) {
                 StandardCharsets.UTF_8
             );
 
-            JsonElement parsed =
-                JsonParser.parseString(content);
+            JsonElement parsed = JsonParser.parseString(content);
 
-            JsonObject pathObj = new JsonObject();
+            JsonObject cacheData =
+                extractCachePathObject(parsed);
 
-            /*
-             * Formato mais comum:
-             *
-             * [
-             *   {
-             *     "task": "...",
-             *     "path": {
-             *       "method": "get",
-             *       "url": "..."
-             *     }
-             *   }
-             * ]
-             */
-            if (
-                parsed.isJsonArray()
-                    && parsed.getAsJsonArray().size() > 0
-            ) {
-                JsonElement firstElement =
-                    parsed.getAsJsonArray().get(0);
-
-                if (firstElement.isJsonObject()) {
-                    JsonObject entry =
-                        firstElement.getAsJsonObject();
-
-                    if (
-                        entry.has("path")
-                            && entry.get("path").isJsonObject()
-                    ) {
-                        pathObj =
-                            entry.getAsJsonObject("path");
-                    } else {
-                        /*
-                         * Fallback caso o próprio objeto já seja
-                         * o conteúdo do cache.
-                         */
-                        pathObj = entry;
-                    }
-                }
-            }
-
-            /*
-             * Também aceita cache salvo como objeto simples,
-             * sem o array externo.
-             */
-            else if (parsed.isJsonObject()) {
-                JsonObject entry =
-                    parsed.getAsJsonObject();
-
-                if (
-                    entry.has("path")
-                        && entry.get("path").isJsonObject()
-                ) {
-                    pathObj =
-                        entry.getAsJsonObject("path");
-                } else {
-                    pathObj = entry;
-                }
-            }
-
-            JsonObject resp = new JsonObject();
-
-            resp.addProperty(
-                "operationId",
-                operationId
-            );
-
-            resp.addProperty(
-                "nodeId",
-                nodeId
-            );
-
-            resp.addProperty(
-                "found",
-                true
-            );
-
+            resp.addProperty("found", true);
             resp.addProperty(
                 "cacheFilePath",
                 cacheFile.toString()
             );
-
-            resp.add(
-                "cacheData",
-                pathObj
-            );
+            resp.add("cacheData", cacheData);
 
             sendToJs(
                 "{ type: 'cacheJsonLoaded', payload: "
@@ -235,8 +130,7 @@ private void handleLoadCacheJson(JsonElement payload) {
 
             Messages.showErrorDialog(
                 project,
-                "Erro ao ler cache: "
-                    + e.getMessage(),
+                "Erro ao ler cache: " + e.getMessage(),
                 "BEX Automation Flow"
             );
         }
