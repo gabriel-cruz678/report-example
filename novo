@@ -1,33 +1,53 @@
-Crie um resolvedor:
+Para voltar a compilar agora
 
-public static String[] resolveMethodAndPath(
-    String operationId,
-    Map<String, String[]> swaggerEndpoints
-) {
-    if (swaggerEndpoints != null) {
-        String[] swaggerEndpoint =
-            swaggerEndpoints.get(operationId);
-
-        if (
-            swaggerEndpoint != null
-                && swaggerEndpoint.length >= 2
-        ) {
-            return new String[]{
-                swaggerEndpoint[0].toUpperCase(),
-                swaggerEndpoint[1]
-            };
-        }
-    }
-
-    return inferMethodAndPath(operationId);
-}
-
-E onde atualmente existe:
+Nas duas ocorrências, substitua por:
 
 String[] methodAndPath =
     inferMethodAndPath(operationId);
 
-deve ficar:
+Ou seja, pesquise no arquivo:
 
-String[] methodAndPath =
-    resolveMethodAndPath(operationId, swaggerEndpoints);
+resolveMethodAndPath(operationId, swaggerEndpoints)
+
+e troque as duas ocorrências por:
+
+inferMethodAndPath(operationId)
+
+Depois execute novamente:
+
+.\gradlew clean build
+Por que deu erro
+
+O método foi criado para receber:
+
+resolveMethodAndPath(
+    operationId,
+    swaggerEndpoints
+);
+
+Porém o código não declarou nem recebeu este mapa:
+
+Map<String, String[]> swaggerEndpoints
+
+Por isso o compilador informa:
+
+cannot find symbol
+symbol: variable swaggerEndpoints
+location: class FeatureParser
+Importante
+
+Essa troca faz o projeto compilar novamente, mas ainda mantém o problema de:
+
+buscarHierarquiasVigentes
+
+ser inferido como:
+
+POST /buscar/hierarquias/vigentes
+
+A integração definitiva com o Swagger precisa ser feita depois, passando o mapa verdadeiro do Swagger ao FeatureParser. Não basta escrever swaggerEndpoints no método sem que esse mapa seja criado e entregue pelo FlowEditorBridge.
+
+O erro:
+
+getHeaderField("Location") must not be null
+
+é outro problema do resolvedor de versões do IntelliJ/Gradle. Os erros que estão bloqueando o compileJava agora são as duas referências inexistentes a swaggerEndpoints.
