@@ -1,111 +1,136 @@
+Corrija o trecho do handleLoadYamlConfig()
+
+Logo depois de:
+
+OrchestratorResult result =
+    Orchestrator.run(finalYamlPath, projectRoot);
+
+deixe assim:
+
+currentFeatureFile = Path.of(
+    projectRoot,
+    result.getFeaturePath()
+).toString();
+
+JsonArray endpointsArr = new JsonArray();
+
+/*
+ * Limpa os endpoints do Swagger anteriormente carregado.
+ * Deve ficar antes do for, nunca dentro dele.
+ */
+swaggerEndpointsByOperationId.clear();
+
+for (SwaggerEndpoint ep : result.getEndpoints()) {
+
+    String operationId = ep.getOperationId();
+    String method = ep.getMethod();
+    String path = ep.getPath();
+
+    JsonObject obj = new JsonObject();
+
+    obj.addProperty(
+        "operationId",
+        operationId
+    );
+
+    obj.addProperty(
+        "method",
+        method
+    );
+
+    obj.addProperty(
+        "path",
+        path
+    );
+
+    obj.addProperty(
+        "summary",
+        ep.getSummary()
+    );
+
+    /*
+     * Salva o relacionamento:
+     *
+     * operationId -> método e rota reais do Swagger
+     */
+    if (
+        operationId != null
+            && !operationId.isBlank()
+            && method != null
+            && !method.isBlank()
+            && path != null
+            && !path.isBlank()
+    ) {
+        swaggerEndpointsByOperationId.put(
+            normalizeOperationId(operationId),
+            new SwaggerEndpointInfo(
+                method.trim().toUpperCase(),
+                path.trim()
+            )
+        );
+    }
+
+    endpointsArr.add(obj);
+}
+Onde colocar o clear()
+
+Coloque exatamente antes do for:
+
+swaggerEndpointsByOperationId.clear();
+
+for (SwaggerEndpoint ep : result.getEndpoints()) {
+
+Não coloque:
+
+dentro do for;
+no handlePickFeatureFile();
+depois de preencher o mapa.
+
+Se colocar dentro do for, a cada endpoint o mapa será apagado e sobrará apenas o último.
+
+Como fica o trecho principal
+
+A sequência correta é:
+
+OrchestratorResult result =
+    Orchestrator.run(finalYamlPath, projectRoot);
+
+currentFeatureFile = Path.of(
+    projectRoot,
+    result.getFeaturePath()
+).toString();
+
+JsonArray endpointsArr = new JsonArray();
+
+swaggerEndpointsByOperationId.clear();
+
+for (SwaggerEndpoint ep : result.getEndpoints()) {
+    String operationId = ep.getOperationId();
+    String method = ep.getMethod();
+    String path = ep.getPath();
+
+    // Monta o JSON para a tela.
+
+    // Também preenche o mapa para uso posterior.
+}
+Depois, no handlePickFeatureFile()
+
+No método mostrado anteriormente, você tem:
+
 List<FeatureParser.ApiEndpoint> eps =
     FeatureParser.parseFeatureFile(currentFeatureFile);
 
-for (FeatureParser.ApiEndpoint ep : eps) {
-    enrichEndpointFromCache(projectRoot, ep);
-}
-
-O problema é que ep chega nessa função assim:
-
-buscarHierarquiasVigentes
-POST
-/buscar/hierarquias/vigentes
-
-Logo, enrichEndpointFromCache() procura o cache errado. A correção definitiva é aplicar os dados reais do Swagger antes de procurar o cache.
-
-1. Não passe swaggerEndpoints para o FeatureParser
-
-No FeatureParser, mantenha:
-
-String[] methodAndPath = inferMethodAndPath(operationId);
-
-As duas ocorrências que receberam:
-
-resolveMethodAndPath(operationId, swaggerEndpoints)
-
-devem voltar para inferMethodAndPath(). O mapa do Swagger deve existir no FlowEditorBridge.
-
-2. Adicione um índice do Swagger no FlowEditorBridge
-
-No começo da classe:
-
-private final Map<String, SwaggerEndpointInfo> swaggerEndpointsByOperationId =
-    new HashMap<>();
-
-private static class SwaggerEndpointInfo {
-    private final String method;
-    private final String path;
-
-    private SwaggerEndpointInfo(String method, String path) {
-        this.method = method;
-        this.path = path;
-    }
-}
-
-Confirme estes imports:
-
-import java.util.HashMap;
-import java.util.Map;
-
-Adicione também:
-
-private static String normalizeOperationId(String operationId) {
-    if (operationId == null) {
-        return "";
-    }
-
-    return operationId
-        .trim()
-        .toLowerCase()
-        .replaceAll("[^a-z0-9]", "");
-}
-3. Preencha o índice durante a leitura do Swagger
-
-No método handleLoadYamlConfig(), já deve existir um ponto que percorre os endpoints carregados do Swagger e possui:
-
-operationId
-method
-path
-
-Dentro desse mesmo for, adicione:
-
-if (
-    operationId != null
-        && !operationId.isBlank()
-        && method != null
-        && !method.isBlank()
-        && path != null
-        && !path.isBlank()
-) {
-    swaggerEndpointsByOperationId.put(
-        normalizeOperationId(operationId),
-        new SwaggerEndpointInfo(
-            method.trim().toUpperCase(),
-            path.trim()
-        )
-    );
-}
-
-O mapa precisa ficar assim:
-
-buscarhierarquiasvigentes
-    → GET
-    → /api/v1/vigente
-
-É importante limpar o mapa antes de carregar outro Swagger:
-
-swaggerEndpointsByOperationId.clear();
-4. Altere exatamente o loop mostrado na sua imagem
-
-Atualmente:
+String suite =
+    FeatureParser.extractSuiteName(currentFeatureFile);
 
 for (FeatureParser.ApiEndpoint ep : eps) {
     enrichEndpointFromCache(projectRoot, ep);
 }
 
-Substitua por:
+Troque o for por:
 
 for (FeatureParser.ApiEndpoint ep : eps) {
+
     SwaggerEndpointInfo swaggerEndpoint =
         swaggerEndpointsByOperationId.get(
             normalizeOperationId(ep.operationId)
@@ -116,74 +141,24 @@ for (FeatureParser.ApiEndpoint ep : eps) {
         ep.path = swaggerEndpoint.path;
     }
 
+    System.out.println(
+        "[API FLOW] operationId=" + ep.operationId
+            + " | method=" + ep.method
+            + " | path=" + ep.path
+    );
+
     enrichEndpointFromCache(projectRoot, ep);
 }
 
-Esse é o ponto principal da correção.
+A ordem é essencial:
 
-A execução ficará:
+1. FeatureParser cria o endpoint
+2. Swagger corrige method e path
+3. enrichEndpointFromCache procura o cache
+4. Endpoint é enviado ao JavaScript
 
-FeatureParser:
-buscarHierarquiasVigentes
-POST /buscar/hierarquias/vigentes
-             ↓
-Índice do Swagger corrige:
-GET /api/v1/vigente
-             ↓
-enrichEndpointFromCache procura:
-get_api_v1_vigente.json
-             ↓
-cache encontrado
-5. Garanta que o cache seja procurado pela rota real
+Para buscarHierarquiasVigentes, o terminal deverá mostrar:
 
-Dentro de enrichEndpointFromCache(), o nome procurado deve ser montado com:
-
-method + path
-
-e não com:
-
-method + operationId
-
-Adicione estes métodos auxiliares:
-
-private static String buildCacheFileName(
-    String method,
-    String pathOrUrl
-) {
-    String normalizedMethod =
-        method == null
-            ? ""
-            : method.trim().toLowerCase();
-
-    String normalizedPath = extractUrlPath(pathOrUrl)
-        .replaceAll("[^a-zA-Z0-9]+", "_")
-        .replaceAll("^_+|_+$", "")
-        .toLowerCase();
-
-    return normalizedMethod
-        + "_"
-        + normalizedPath
-        + ".json";
-}
-
-private static String extractUrlPath(String pathOrUrl) {
-    if (pathOrUrl == null || pathOrUrl.isBlank()) {
-        return "";
-    }
-
-    String value = pathOrUrl.trim();
-
-    try {
-        if (
-            value.startsWith("http://")
-                || value.startsWith("https://")
-        ) {
-            java.net.URI uri = java.net.URI.create(value);
-            return uri.getPath() == null ? "" : uri.getPath();
-        }
-    } catch (IllegalArgumentException ignored) {
-        // Usa o valor original abaixo.
-    }
-
-    return value;
-}
+[API FLOW] operationId=buscarHierarquiasVigentes
+| method=GET
+| path=/api/v1/vigente
