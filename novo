@@ -1,88 +1,160 @@
-Corrija a linha 262
+public static String[] inferMethodAndPath(String operationId) {
+    if (operationId == null || operationId.trim().isEmpty()) {
+        return new String[]{"", ""};
+    }
 
-Troque:
+    operationId = operationId.trim();
 
-for (String[] g : ep.fieldGets) {
-
-por:
-
-for (FeatureParser.FieldGet g : ep.fieldGets) {
-
-Dentro desse bloco, substitua:
-
-g[0]
-
-por:
-
-g.nameVar
-
-E substitua:
-
-g[1]
-
-por:
-
-g.expr
-
-Exemplo:
-
-for (FeatureParser.FieldGet g : ep.fieldGets) {
-    Map<String, Object> fieldGet = new LinkedHashMap<>();
-
-    fieldGet.put("nameVar", g.nameVar != null ? g.nameVar : "");
-    fieldGet.put("expr", g.expr != null ? g.expr : "");
-
-    fieldGets.add(fieldGet);
-}
-
-Use o nome da sua lista atual no lugar de fieldGets, caso seja diferente.
-
-Corrija a linha 273
-
-Troque:
-
-for (String[] s : ep.fieldSets) {
-
-por:
-
-for (FeatureParser.FieldSet s : ep.fieldSets) {
-
-Dentro desse bloco, faça as substituições:
-
-s[0] → s.pathExpr
-s[1] → s.value
-s[2] → s.before
-s[3] → s.beforeEndpoint
-
-Exemplo:
-
-for (FeatureParser.FieldSet s : ep.fieldSets) {
-    Map<String, Object> fieldSet = new LinkedHashMap<>();
-
-    fieldSet.put("pathExpr", s.pathExpr != null ? s.pathExpr : "");
-    fieldSet.put("value", s.value != null ? s.value : "");
-    fieldSet.put("before", s.before != null ? s.before : "");
-    fieldSet.put(
-        "beforeEndpoint",
-        s.beforeEndpoint != null ? s.beforeEndpoint : ""
+    /*
+     * Formato explícito:
+     * GET /api/v1/vigente
+     */
+    Pattern explicit = Pattern.compile(
+        "^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\\s+(.+)$",
+        Pattern.CASE_INSENSITIVE
     );
 
-    fieldSets.add(fieldSet);
+    Matcher explicitMatcher = explicit.matcher(operationId);
+
+    if (explicitMatcher.matches()) {
+        String path = explicitMatcher.group(2).trim();
+
+        if (!path.startsWith("/")) {
+            path = "/" + path;
+        }
+
+        return new String[]{
+            explicitMatcher.group(1).toUpperCase(),
+            path
+        };
+    }
+
+    /*
+     * Se já recebeu diretamente uma rota.
+     */
+    if (operationId.startsWith("/")) {
+        return new String[]{"", operationId};
+    }
+
+    /*
+     * Método no início:
+     *
+     * get_api_v1_vigente
+     * post_automation_v2_command
+     */
+    for (String method : HTTP_METHODS) {
+        String prefix = method.toLowerCase() + "_";
+
+        if (operationId.toLowerCase().startsWith(prefix)) {
+            String routePart = operationId.substring(prefix.length());
+
+            String path = "/" + routePart
+                .replace("__", "/")
+                .replace("_", "/");
+
+            return new String[]{
+                method,
+                path
+            };
+        }
+    }
+
+    /*
+     * Método no final:
+     *
+     * createPng_automation_v2_print_get
+     * sendCommand_automation_v2_command_post
+     */
+    Pattern suffixPattern = Pattern.compile(
+        "^(.+?)_(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$",
+        Pattern.CASE_INSENSITIVE
+    );
+
+    Matcher suffixMatcher = suffixPattern.matcher(operationId);
+
+    if (suffixMatcher.matches()) {
+        String routePart = suffixMatcher.group(1);
+
+        /*
+         * Remove o nome funcional anterior ao começo conhecido da rota.
+         *
+         * createPng_automation_v2_print
+         *           ↓
+         * automation_v2_print
+         */
+        routePart = extractLikelyRoutePart(routePart);
+
+        String path = "/" + routePart
+            .replace("__", "/")
+            .replace("_", "/");
+
+        return new String[]{
+            suffixMatcher.group(2).toUpperCase(),
+            path
+        };
+    }
+
+    /*
+     * Formato camelCase começando pelo método:
+     *
+     * getHealthCheck
+     */
+    for (String method : HTTP_METHODS) {
+        if (
+            operationId.toLowerCase()
+                .startsWith(method.toLowerCase())
+        ) {
+            String rest =
+                operationId.substring(method.length());
+
+            if (
+                !rest.isEmpty()
+                    && Character.isUpperCase(rest.charAt(0))
+            ) {
+                String path = rest
+                    .replaceAll("([A-Z])", "/$1")
+                    .toLowerCase();
+
+                return new String[]{
+                    method,
+                    path
+                };
+            }
+        }
+    }
+
+    /*
+     * Não inventa mais POST.
+     *
+     * Para operationId personalizado, método e rota precisam
+     * vir obrigatoriamente do Swagger.
+     */
+    return new String[]{"", ""};
 }
-Resumo direto
 
-No FlowEditorBridge.java:
+private static String extractLikelyRoutePart(String value) {
+    String lower = value.toLowerCase();
 
-for (String[] g : ep.fieldGets)
+    String[] commonRouteStarts = {
+        "automation_",
+        "api_",
+        "v1_",
+        "v2_",
+        "health_",
+        "secret_"
+    };
 
-vira:
+    int bestIndex = -1;
 
-for (FeatureParser.FieldGet g : ep.fieldGets)
+    for (String candidate : commonRouteStarts) {
+        int index = lower.indexOf(candidate);
 
-E:
+        if (index >= 0 && (bestIndex < 0 || index < bestIndex)) {
+            bestIndex = index;
+        }
+    }
 
-for (String[] s : ep.fieldSets)
-
-vira:
-
-for (FeatureParser.FieldSet s : ep.fieldSets)
+    return bestIndex >= 0
+        ? value.substring(bestIndex)
+        : value;
+}
