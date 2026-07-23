@@ -1,475 +1,307 @@
-import fs from 'fs';
-import path from 'path';
-import { spawn } from 'child_process';
-import type {
-  ChromiumCodegenOptions,
-  ChromiumCodegenResult,
-  CodegenRecorderOptions,
-  RecorderActionInput,
-  RecorderActionOutput,
-  RecorderFunctionName,
-  RecorderLocatorInfo,
-} from './types';
-import {
-  createDefaultOutputFile,
-  createTempOutputFile,
-  ensureAbsolutePath,
-  formatGeolocation,
-  formatViewport,
-  resolveLocalPlaywrightBinary,
-  resolveNpxCommand,
-  sanitizeFileName,
-} from './utils';
+A função deve começar assim:
 
-export function buildChromiumCodegenArgs(options: ChromiumCodegenOptions = {}): string[] {
-  const args: string[] = ['codegen'];
+function addFieldGetRow(nameVar, expr) {
+    var list = document.getElementById('field-get-list');
+    if (!list) return;
 
-  args.push('--browser', options.browser ?? 'chromium');
-  args.push('--target', options.target ?? 'playwright-test');
+    nameVar = nameVar || '';
+    expr = expr || '';
 
-  if (options.testIdAttribute) {
-    args.push('--test-id-attribute', options.testIdAttribute);
-  }
+    var row = document.createElement('div');
+    row.className = 'response-attr-row field-get-row';
 
-  if (options.device) {
-    args.push('--device', options.device);
-  }
+    row.innerHTML =
+        '<input type="text" ' +
+        'class="popup-input field-get-name" ' +
+        'placeholder="name_var (ex: token)" ' +
+        'value="' + escapeHtmlAttr(nameVar) + '">' +
 
-  const viewport = formatViewport(options.viewport);
-  if (viewport) {
-    args.push('--viewport-size', viewport);
-  }
+        '<input type="text" ' +
+        'class="popup-input field-get-expr" ' +
+        'placeholder="expr (ex: access_token)" ' +
+        'value="' + escapeHtmlAttr(expr) + '">' +
 
-  if (options.colorScheme) {
-    args.push('--color-scheme', options.colorScheme);
-  }
+        '<button type="button" ' +
+        'class="btn btn-secondary response-attr-remove" ' +
+        'title="Remover">×</button>';
 
-  if (options.lang) {
-    args.push('--lang', options.lang);
-  }
+    list.appendChild(row);
 
-  if (options.timezone) {
-    args.push('--timezone', options.timezone);
-  }
+    row.querySelector('.response-attr-remove')
+        .addEventListener('click', function () {
+            row.remove();
+        });
+}
+O mesmo erro existe no SET
 
-  const geolocation = formatGeolocation(options.geolocation);
-  if (geolocation) {
-    args.push('--geolocation', geolocation);
-  }
+Na imagem aparece:
 
-  if (options.saveStorage) {
-    args.push('--save-storage', options.saveStorage);
-  }
+function addFieldSetRow(pathExpr, value) {
+    pathExpr = 'teste 1618';
+    value = 'teste 1619';
 
-  if (options.loadStorage) {
-    args.push('--load-storage', options.loadStorage);
-  }
-
-  if (options.userDataDir) {
-    args.push('--user-data-dir', options.userDataDir);
-  }
-
-  if (options.extraArgs?.length) {
-    args.push(...options.extraArgs);
-  }
-
-  if (options.url) {
-    args.push(options.url);
-  }
-
-  return args;
+    // restante...
 }
 
-export function resolveChromiumCodegenCommand(cwd: string): { command: string; argsPrefix: string[] } {
-  const localBinary = resolveLocalPlaywrightBinary(cwd);
-  if (localBinary) {
-    return { command: localBinary, argsPrefix: [] };
-  }
+Essas duas linhas também devem ser removidas.
 
-  return {
-    command: resolveNpxCommand(),
-    argsPrefix: ['playwright'],
-  };
+Corrija para:
+
+function addFieldSetRow(pathExpr, value) {
+    var list = document.getElementById('field-set-list');
+    if (!list) return;
+
+    pathExpr = pathExpr || '';
+    value = value !== undefined && value !== null
+        ? String(value)
+        : '';
+
+    var row = document.createElement('div');
+    row.className = 'field-set-row';
+
+    row.innerHTML =
+        '<input type="text" ' +
+        'class="popup-input field-set-pathexpr" ' +
+        'placeholder="Pathexpr (ex: payload.username)" ' +
+        'value="' + escapeHtmlAttr(pathExpr) + '">' +
+
+        '<input type="text" ' +
+        'class="popup-input field-set-value" ' +
+        'placeholder="Value (ex: {{token}})" ' +
+        'value="' + escapeHtmlAttr(value) + '">' +
+
+        '<button type="button" ' +
+        'class="btn btn-secondary response-attr-remove" ' +
+        'title="Remover">×</button>';
+
+    list.appendChild(row);
+
+    row.querySelector('.response-attr-remove')
+        .addEventListener('click', function () {
+            row.remove();
+        });
 }
 
-export async function runChromiumCodegen(options: ChromiumCodegenOptions = {}): Promise<ChromiumCodegenResult> {
-  const cwd = path.resolve(options.cwd ?? process.cwd());
-  const outputFile = options.outputFile
-    ? ensureAbsolutePath(options.outputFile, cwd)
-    : createDefaultOutputFile(cwd);
+Esse é o primeiro erro concreto que impede os valores corretos de aparecerem.
 
-  const { command, argsPrefix } = resolveChromiumCodegenCommand(cwd);
-  const args = [...argsPrefix, ...buildChromiumCodegenArgs(options)];
+O segundo ponto é o formato enviado para o JavaScript
 
-  const outputIndex = args.indexOf('--output');
-  if (outputIndex === -1) {
-    args.splice(argsPrefix.length + 1, 0, '--output', outputFile);
+O flowEditor.js procura exatamente estas propriedades:
+
+endpoint.fieldGets
+endpoint.fieldSets
+
+E espera exatamente estes formatos:
+
+fieldGets: [
+  {
+    nameVar: "token",
+    expr: "access_token"
   }
+]
+fieldSets: [
+  {
+    pathExpr: "payload.username",
+    value: "i447408"
+  }
+]
 
-  const exitCode = await new Promise<number>((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      stdio: 'inherit',
-      env: {
-        ...process.env,
-        ...options.env,
-      },
+Se o código Java estiver enviando algo como:
+
+{
+  "name_var": "token",
+  "getFieldResponse_expr": "access_token"
+}
+
+o frontend não reconhecerá diretamente.
+
+Também não reconhecerá:
+
+{
+  "fieldGet": []
+}
+
+porque o frontend espera:
+
+{
+  "fieldGets": []
+}
+
+O mesmo vale para fieldSets.
+
+Conversão correta das tabelas
+
+O parser do .feature deve fazer esta conversão:
+
+Tabela capturo variaveis
+
+Entrada:
+
+name_var
+getFieldResponse_method
+getFieldResponse_pathkey
+getFieldResponse_expr
+
+Saída:
+
+{
+    operationId: row.getFieldResponse_pathkey.trim(),
+    method: row.getFieldResponse_method.trim().toLowerCase(),
+    fieldGet: {
+        nameVar: row.name_var.trim(),
+        expr: row.getFieldResponse_expr.trim()
+    }
+}
+Tabela injeto variaveis
+
+Entrada:
+
+setFieldRequest_method
+setFieldRequest_pathkey
+setFieldRequest_pathexpr
+setFieldRequest_value
+
+Saída:
+
+{
+    operationId: row.setFieldRequest_pathkey.trim(),
+    method: row.setFieldRequest_method.trim().toLowerCase(),
+    fieldSet: {
+        pathExpr: row.setFieldRequest_pathexpr.trim(),
+        value: row.setFieldRequest_value.trim()
+    }
+}
+Exemplo de montagem dos endpoints
+
+A lógica pode ser equivalente a esta:
+
+function applyFeatureFields(endpoints, getRows, setRows) {
+    endpoints.forEach(function (endpoint) {
+        endpoint.fieldGets = [];
+        endpoint.fieldSets = [];
+
+        getRows.forEach(function (row) {
+            var operationId = String(
+                row.getFieldResponse_pathkey || ''
+            ).trim();
+
+            if (operationId !== endpoint.operationId) {
+                return;
+            }
+
+            endpoint.fieldGets.push({
+                nameVar: String(row.name_var || '').trim(),
+                expr: String(row.getFieldResponse_expr || '').trim()
+            });
+        });
+
+        setRows.forEach(function (row) {
+            var operationId = String(
+                row.setFieldRequest_pathkey || ''
+            ).trim();
+
+            if (operationId !== endpoint.operationId) {
+                return;
+            }
+
+            endpoint.fieldSets.push({
+                pathExpr: String(
+                    row.setFieldRequest_pathexpr || ''
+                ).trim(),
+
+                value: String(
+                    row.setFieldRequest_value || ''
+                ).trim()
+            });
+        });
     });
 
-    child.on('error', reject);
-    child.on('close', (code: number | null) => resolve(code ?? 0));
-  });
-
-  if (exitCode !== 0) {
-    throw new Error(`Playwright codegen finalizou com código ${exitCode}.`);
-  }
-
-  const code = fs.existsSync(outputFile)
-    ? fs.readFileSync(outputFile, 'utf8')
-    : undefined;
-
-  return {
-    command,
-    args,
-    outputFile,
-    exitCode,
-    code,
-  };
+    return endpoints;
 }
+Como deve ficar para os dois endpoints da imagem
+Autenticador
+{
+  operationId: "autenticator_automation_v2_autenticator__ambiente__post",
 
-export async function runChromiumCodegenInTempFile(
-  options: Omit<ChromiumCodegenOptions, 'outputFile'> = {},
-): Promise<ChromiumCodegenResult> {
-  return runChromiumCodegen({
-    ...options,
-    outputFile: createTempOutputFile(),
-  });
+  fieldGets: [
+    {
+      nameVar: "token",
+      expr: "access_token"
+    }
+  ],
+
+  fieldSets: [
+    {
+      pathExpr: "payload.username",
+      value: "i447408"
+    }
+  ]
 }
+Disconnect user
+{
+  operationId: "disconnectUser_automation_v2_disconnect_user_post",
 
-export class CodegenRecorder {
-  private readonly cwd: string;
-  private readonly outputDir: string;
-  private readonly promptPageVarName: string;
-  private readonly promptTestVarName: string;
-  private readonly actions: RecorderActionOutput[] = [];
-  private readonly actionsByPageKey = new Map<string, RecorderActionOutput[]>();
-  private readonly outputJsonPathByPageKey = new Map<string, string>();
-  private outputJsonPath?: string;
-  private promptLogPath?: string;
+  fieldGets: [],
 
-  public constructor(options: CodegenRecorderOptions = {}) {
-    this.cwd = path.resolve(options.cwd ?? process.cwd());
-
-    const explicitOutputJsonPath = options.outputJsonPath
-      ? ensureAbsolutePath(options.outputJsonPath, this.cwd)
-      : undefined;
-
-    this.outputDir = options.outputDir
-      ? ensureAbsolutePath(options.outputDir, this.cwd)
-      : explicitOutputJsonPath
-        ? path.dirname(explicitOutputJsonPath)
-        : path.resolve(this.cwd, '.cache');
-
-    fs.mkdirSync(this.outputDir, { recursive: true });
-
-    this.promptLogPath = options.promptLogPath
-      ? ensureAbsolutePath(options.promptLogPath, this.cwd)
-      : path.join(this.outputDir, 'prompt.log');
-
-    this.promptPageVarName = options.promptPageVarName ?? 'sharedPage';
-    this.promptTestVarName = options.promptTestVarName ?? 'test';
-  }
-
-  public ordnalPt(n: number): string {
-    const map: Record<number, string> = {
-      1: 'primeiro',
-      2: 'segundo',
-      3: 'terceiro',
-      4: 'quarto',
-      5: 'quinto',
-      6: 'sexto',
-      7: 'sétimo',
-      8: 'oitavo',
-      9: 'nono',
-      10: 'décimo',
-    };
-    return map[n] ?? `${n}º`;
-  }
-
-  public nthFromCssSelector(sel?: string): number | null {
-    if (!sel) return null;
-    const match = sel.match(/:nth-child\((\d+)\)/i);
-    if (!match) return null;
-    const n = Number.parseInt(match[1] ?? '', 10);
-    return Number.isFinite(n) ? n : null;
-  }
-
-  public buildPromptLine(normalizedTask: string): string {
-    const safe = this.escapeForTemplateLiteral(normalizedTask);
-    return `await prompt(\`${safe}\`, { page: ${this.promptPageVarName}, ${this.promptTestVarName} });`;
-  }
-
-  public elementTypePt(args: Record<string, unknown>): string {
-    const role = String(args.role ?? '').toLowerCase();
-    const tag = String(args.tag ?? '').toLowerCase();
-    const inputType = String(args.inputType ?? '').toLowerCase();
-
-    if (role) {
-      if (role === 'button') return 'botão';
-      if (role === 'link') return 'link';
-      if (role === 'textbox') return 'campo';
-      if (role === 'combobox') return 'lista';
-      if (role === 'checkbox') return 'checkbox';
-      if (role === 'radio') return 'opção';
-      if (role === 'switch') return 'switch';
-      if (role === 'tab') return 'aba';
-      if (role === 'menuitem') return 'item de menu';
-      if (role === 'slider') return 'controle deslizante';
+  fieldSets: [
+    {
+      pathExpr: "payload",
+      value: "{{token}}"
     }
-
-    if (tag) {
-      if (tag === 'button') return 'botão';
-      if (tag === 'a') return 'link';
-      if (tag === 'input') {
-        if (['checkbox', 'radio'].includes(inputType)) return inputType === 'radio' ? 'opção' : inputType;
-        return 'campo';
-      }
-      if (tag === 'textarea') return 'campo';
-      if (tag === 'select') return 'lista';
-    }
-
-    return 'elemento';
-  }
-
-  public registerAction(input: RecorderActionInput): RecorderActionOutput {
-    const pageTitle = input.title?.trim() || 'recording';
-    const normalizedTask = (input.normalizedTask?.trim() || this.buildNormalizedTask(input.functionName, input.arguments)).trim();
-
-    const output: RecorderActionOutput = {
-      normalizedTask,
-      functionName: input.functionName,
-      arguments: this.cleanArguments(input.arguments),
-      timestamp: input.timestamp ?? new Date().toISOString(),
-    };
-
-    this.actions.push(output);
-
-    const pageActions = this.getPageActions(pageTitle);
-    pageActions.push(output);
-
-    this.outputJsonPath = this.getOutputJsonPathForTitle(pageTitle);
-    this.persist(pageTitle);
-
-    return output;
-  }
-
-  public getActions(): RecorderActionOutput[] {
-    return [...this.actions];
-  }
-
-  public getOutputJsonPath(): string | undefined {
-    return this.outputJsonPath;
-  }
-
-  public getPromptLogPath(): string | undefined {
-    return this.promptLogPath;
-  }
-
-  private buildNormalizedTask(functionName: RecorderFunctionName, args: RecorderLocatorInfo): string {
-    const element = this.renderElement(args);
-    const value = args.value;
-    const key = typeof args.key === 'string' ? args.key : undefined;
-    const files = Array.isArray(args.files) ? args.files : undefined;
-
-    switch (functionName) {
-      case 'locator_fill':
-        return `Preencho ${element} com o valor ${this.renderValue(value)}`;
-      case 'locator_clear':
-        return `Limpo ${element}`;
-      case 'locator_click':
-        return `Clico ${this.renderOnElement(args)}`;
-      case 'locator_dblclick':
-        return `Dou duplo clique ${this.renderOnElement(args)}`;
-      case 'locator_check':
-        return `Marco ${element}`;
-      case 'locator_uncheck':
-        return `Desmarco ${element}`;
-      case 'locator_selectOption':
-        return value == null
-          ? `Seleciono ${element}`
-          : `Seleciono o valor ${this.renderValue(value)} ${this.renderInElement(args)}`;
-      case 'page_pressKey':
-        return key ? `Pressiono a tecla ${key}` : 'Pressiono uma tecla';
-      case 'scrollIntoElementView':
-        return `Rolo até ${element}`;
-      case 'locator_setInputFiles':
-        return files?.length
-          ? `Envio o arquivo ${files.join(', ')} para ${element}`
-          : `Envio arquivo para ${element}`;
-      default:
-        return `${functionName} ${element}`;
-    }
-  }
-
-  private cleanArguments(args: RecorderLocatorInfo): RecorderLocatorInfo {
-    const orderedEntries: Array<[string, unknown]> = [];
-    const pushIfDefined = (key: string) => {
-      const value = args[key];
-      if (value !== undefined && value !== null && value !== '') {
-        orderedEntries.push([key, value]);
-      }
-    };
-
-    pushIfDefined('id');
-    pushIfDefined('class');
-    pushIfDefined('data-testid');
-    pushIfDefined('cssSelector');
-    pushIfDefined('xpath');
-    pushIfDefined('role');
-    pushIfDefined('name');
-    pushIfDefined('tag');
-    pushIfDefined('inputType');
-    pushIfDefined('value');
-    pushIfDefined('key');
-    pushIfDefined('files');
-
-    for (const [key, value] of Object.entries(args)) {
-      if (orderedEntries.some(([current]) => current === key)) continue;
-      if (value === undefined || value === null || value === '') continue;
-      if (key === 'locator') continue;
-      orderedEntries.push([key, value]);
-    }
-
-    return Object.fromEntries(orderedEntries) as RecorderLocatorInfo;
-  }
-
-  private getPageKey(title?: string): string {
-    return sanitizeFileName(title || 'recording') || 'recording';
-  }
-
-  private getOutputJsonPathForTitle(title?: string): string {
-    const pageKey = this.getPageKey(title);
-    const existingPath = this.outputJsonPathByPageKey.get(pageKey);
-    if (existingPath) {
-      return existingPath;
-    }
-
-    const outputJsonPath = path.join(this.outputDir, `${pageKey}.json`);
-    this.outputJsonPathByPageKey.set(pageKey, outputJsonPath);
-    return outputJsonPath;
-  }
-
-  private getPageActions(title?: string): RecorderActionOutput[] {
-    const pageKey = this.getPageKey(title);
-    const existing = this.actionsByPageKey.get(pageKey);
-    if (existing) {
-      return existing;
-    }
-
-    const outputJsonPath = this.getOutputJsonPathForTitle(title);
-    const loadedActions = this.readActionsFile(outputJsonPath);
-    this.actionsByPageKey.set(pageKey, loadedActions);
-    return loadedActions;
-  }
-
-  private readActionsFile(outputJsonPath: string): RecorderActionOutput[] {
-    if (!fs.existsSync(outputJsonPath)) {
-      return [];
-    }
-
-    try {
-      const raw = fs.readFileSync(outputJsonPath, 'utf8').trim();
-      if (!raw) {
-        return [];
-      }
-
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed as RecorderActionOutput[] : [];
-    } catch {
-      return [];
-    }
-  }
-
-  private ensureOutputPaths(title?: string): { outputJsonPath: string; promptLogPath: string } {
-    const outputJsonPath = this.getOutputJsonPathForTitle(title);
-    const promptLogPath = this.promptLogPath ?? path.join(this.outputDir, 'prompt.log');
-
-    fs.mkdirSync(path.dirname(outputJsonPath), { recursive: true });
-    fs.mkdirSync(path.dirname(promptLogPath), { recursive: true });
-
-    this.outputJsonPath = outputJsonPath;
-    this.promptLogPath = promptLogPath;
-
-    return { outputJsonPath, promptLogPath };
-  }
-
-  private persist(title?: string): void {
-    const { outputJsonPath, promptLogPath } = this.ensureOutputPaths(title);
-    const pageActions = this.getPageActions(title);
-
-    fs.writeFileSync(outputJsonPath, `${JSON.stringify(pageActions, null, 2)}\n`, 'utf8');
-
-    const promptLog = this.actions.map(action => this.buildPromptLine(action.normalizedTask)).join('\n');
-    fs.writeFileSync(promptLogPath, promptLog ? `${promptLog}\n` : '', 'utf8');
-  }
-
-  private renderElement(args: RecorderLocatorInfo): string {
-    const type = this.elementTypePt(args);
-    const article = this.definiteArticle(type);
-    const ordinal = this.renderOrdinal(args);
-    const name = this.renderName(args);
-    return `${article} ${ordinal}${type}${name}`.replace(/\s+/g, ' ').trim();
-  }
-
-  private renderOnElement(args: RecorderLocatorInfo): string {
-    const type = this.elementTypePt(args);
-    const article = this.definiteArticle(type);
-    const preposition = article === 'a' ? 'na' : 'no';
-    const ordinal = this.renderOrdinal(args);
-    const name = this.renderName(args);
-    return `${preposition} ${ordinal}${type}${name}`.replace(/\s+/g, ' ').trim();
-  }
-
-  private renderInElement(args: RecorderLocatorInfo): string {
-    const type = this.elementTypePt(args);
-    const article = this.definiteArticle(type);
-    const preposition = article === 'a' ? 'na' : 'no';
-    const ordinal = this.renderOrdinal(args);
-    const name = this.renderName(args);
-    return `${preposition} ${ordinal}${type}${name}`.replace(/\s+/g, ' ').trim();
-  }
-
-  private renderOrdinal(args: RecorderLocatorInfo): string {
-    const nth = this.nthFromCssSelector(args.cssSelector);
-    return nth ? `${this.ordnalPt(nth)} ` : '';
-  }
-
-  private renderName(args: RecorderLocatorInfo): string {
-    const name = args.name || args['data-testid'] || this.normalizeId(args.id);
-    if (!name) return '';
-    return ` ${String(name).trim()}`;
-  }
-
-  private normalizeId(id?: string): string | undefined {
-    if (!id) return undefined;
-    return String(id).replace(/^#/, '');
-  }
-
-  private renderValue(value: unknown): string {
-    if (Array.isArray(value)) {
-      return value.join(', ');
-    }
-    if (typeof value === 'boolean') {
-      return value ? 'verdadeiro' : 'falso';
-    }
-    return String(value ?? '').trim();
-  }
-
-  private definiteArticle(type: string): 'o' | 'a' {
-    return ['lista', 'opção', 'aba'].includes(type) ? 'a' : 'o';
-  }
-
-  private escapeForTemplateLiteral(input: string): string {
-    return input.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
-  }
+  ]
 }
+Outro ponto que precisa ser exato
+
+O relacionamento é feito pelo operationId. Portanto, estes valores precisam ser idênticos:
+
+getFieldResponse_pathkey
+setFieldRequest_pathkey
+endpoint.operationId
+
+Qualquer diferença impede a associação:
+
+autenticator
+authenticator
+disconnectUser
+disconnectuser
+__ambiente__
+_ambiente_
+
+Também é importante remover espaços com .trim().
+
+Diagnóstico mais provável
+
+Há pelo menos dois problemas:
+
+Erro confirmado no frontend: valores de GET e SET estão sendo sobrescritos pelas strings de teste nas funções addFieldGetRow e addFieldSetRow.
+Possível erro de integração: o parser do .feature precisa devolver os dados como fieldGets e fieldSets, usando os nomes internos nameVar, expr, pathExpr e value.
+
+A primeira alteração imediata é remover estas quatro atribuições:
+
+nameVar = 'teste 1573 flowEditor';
+expr = 'teste 1574 flowEditor';
+
+pathExpr = 'teste 1618';
+value = 'teste 1619';
+
+Depois disso, o próximo teste é imprimir antes do popup:
+
+console.log('Endpoint selecionado:', node.endpoint);
+console.log('GETS:', node.endpoint.fieldGets);
+console.log('SETS:', node.endpoint.fieldSets);
+
+O resultado correto deve ser:
+
+GETS: [
+  {
+    nameVar: "token",
+    expr: "access_token"
+  }
+]
+
+SETS: [
+  {
+    pathExpr: "payload.username",
+    value: "i447408"
+  }
+]
