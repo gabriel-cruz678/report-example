@@ -1,98 +1,232 @@
-private boolean cacheContainsOperationId(
-    Path cacheFile,
-    String expectedOperationId
+Substitua enrichEndpointFromCache() inteiro
+private void enrichEndpointFromCache(
+    String projectRoot,
+    FeatureParser.ApiEndpoint ep
 ) {
+    if (
+        projectRoot == null
+            || projectRoot.isBlank()
+            || ep == null
+    ) {
+        return;
+    }
+
     try {
+        /*
+         * Localiza o cache principalmente pelo operationId.
+         */
+        Path cacheFile = findCacheFile(
+            projectRoot,
+            ep.method,
+            ep.path,
+            ep.operationId
+        );
+
+        if (
+            cacheFile == null
+                || !Files.isRegularFile(cacheFile)
+        ) {
+            System.out.println(
+                "[API FLOW] Cache não encontrado para: "
+                    + ep.operationId
+            );
+            return;
+        }
+
         String content = Files.readString(
             cacheFile,
             StandardCharsets.UTF_8
         );
 
-        JsonElement parsed =
-            JsonParser.parseString(content);
+        JsonElement parsed = JsonParser.parseString(content);
+        JsonObject cacheEntry = null;
 
-        return jsonContainsOperationId(
-            parsed,
-            expectedOperationId
+        /*
+         * Seu cache possui este formato:
+         *
+         * [
+         *   {
+         *     "operationId": "...",
+         *     "path": { ... }
+         *   }
+         * ]
+         */
+        if (parsed.isJsonArray()) {
+            JsonArray array = parsed.getAsJsonArray();
+
+            if (
+                array.size() > 0
+                    && array.get(0).isJsonObject()
+            ) {
+                cacheEntry = array
+                    .get(0)
+                    .getAsJsonObject();
+            }
+        } else if (parsed.isJsonObject()) {
+            cacheEntry = parsed.getAsJsonObject();
+        }
+
+        if (cacheEntry == null) {
+            return;
+        }
+
+        /*
+         * No seu JSON, method e url ficam dentro de "path".
+         */
+        JsonObject requestData = cacheEntry;
+
+        if (
+            cacheEntry.has("path")
+                && cacheEntry.get("path").isJsonObject()
+        ) {
+            requestData =
+                cacheEntry.getAsJsonObject("path");
+        }
+
+        /*
+         * Atualiza o método do endpoint com o valor real do cache.
+         */
+        if (
+            requestData.has("method")
+                && requestData.get("method").isJsonPrimitive()
+        ) {
+            String cacheMethod =
+                requestData.get("method")
+                    .getAsString()
+                    .trim();
+
+            if (!cacheMethod.isEmpty()) {
+                ep.method =
+                    cacheMethod.toUpperCase(
+                        java.util.Locale.ROOT
+                    );
+            }
+        }
+
+        /*
+         * Atualiza o path utilizado no card do fluxo.
+         */
+        String cacheUrl = "";
+
+        if (
+            requestData.has("url")
+                && requestData.get("url").isJsonPrimitive()
+        ) {
+            cacheUrl =
+                requestData.get("url")
+                    .getAsString()
+                    .trim();
+        } else if (
+            requestData.has("path")
+                && requestData.get("path").isJsonPrimitive()
+        ) {
+            cacheUrl =
+                requestData.get("path")
+                    .getAsString()
+                    .trim();
+        }
+
+        if (!cacheUrl.isEmpty()) {
+            ep.path = extractRequestPath(cacheUrl);
+        }
+
+        System.out.println(
+            "[API FLOW] Cache aplicado:"
+                + " operationId=" + ep.operationId
+                + " | method=" + ep.method
+                + " | path=" + ep.path
+                + " | file=" + cacheFile
         );
 
     } catch (Exception e) {
         System.out.println(
-            "[API FLOW CACHE] Ignorando arquivo inválido: "
-                + cacheFile
-                + " | "
+            "[API FLOW] Erro ao enriquecer endpoint "
+                + ep.operationId
+                + ": "
                 + e.getMessage()
         );
 
-        return false;
+        e.printStackTrace();
     }
 }
+Adicione este método auxiliar
 
-private boolean jsonContainsOperationId(
-    JsonElement element,
-    String expectedOperationId
-) {
-    if (element == null || element.isJsonNull()) {
-        return false;
+Coloque-o fora de qualquer outro método, próximo ao enrichEndpointFromCache():
+
+private String extractRequestPath(String urlOrPath) {
+    if (
+        urlOrPath == null
+            || urlOrPath.isBlank()
+    ) {
+        return "";
     }
 
-    if (element.isJsonArray()) {
-        for (JsonElement item : element.getAsJsonArray()) {
+    String value = urlOrPath.trim();
+
+    /*
+     * Converte:
+     *
+     * http://127.0.0.1:8443/automation/v2/disconnect-user
+     *
+     * em:
+     *
+     * /automation/v2/disconnect-user
+     */
+    try {
+        if (
+            value.startsWith("http://")
+                || value.startsWith("https://")
+        ) {
+            java.net.URI uri =
+                java.net.URI.create(value);
+
+            String path = uri.getPath();
+
             if (
-                jsonContainsOperationId(
-                    item,
-                    expectedOperationId
-                )
+                path != null
+                    && !path.isBlank()
             ) {
-                return true;
+                return path;
             }
         }
-
-        return false;
+    } catch (IllegalArgumentException ignored) {
+        // Continua tratando o conteúdo como um path simples.
     }
 
-    if (!element.isJsonObject()) {
-        return false;
+    int queryIndex = value.indexOf('?');
+
+    if (queryIndex >= 0) {
+        value = value.substring(0, queryIndex);
     }
 
-    JsonObject object = element.getAsJsonObject();
+    int fragmentIndex = value.indexOf('#');
 
-    if (
-        object.has("operationId")
-            && object.get("operationId").isJsonPrimitive()
-    ) {
-        String cachedOperationId =
-            object.get("operationId")
-                .getAsString()
-                .trim();
+    if (fragmentIndex >= 0) {
+        value = value.substring(0, fragmentIndex);
+    }
 
-        if (
-            cachedOperationId.equalsIgnoreCase(
-                expectedOperationId
-            )
-        ) {
-            return true;
-        }
+    if (!value.startsWith("/")) {
+        value = "/" + value;
+    }
+
+    return value;
+}
+A ordem no handlePickFeatureFile() deve continuar assim
+for (FeatureParser.ApiEndpoint ep : eps) {
+
+    SwaggerEndpointInfo swaggerEndpoint =
+        swaggerEndpointsByOperationId.get(
+            normalizeOperationId(ep.operationId)
+        );
+
+    if (swaggerEndpoint != null) {
+        ep.method = swaggerEndpoint.method;
+        ep.path = swaggerEndpoint.path;
     }
 
     /*
-     * Também procura em objetos internos, caso futuramente
-     * o operationId seja gravado dentro de "path".
+     * Agora esse método também preenche ep.path
+     * usando a URL encontrada dentro do cache.
      */
-    for (
-        Map.Entry<String, JsonElement> entry
-            : object.entrySet()
-    ) {
-        if (
-            jsonContainsOperationId(
-                entry.getValue(),
-                expectedOperationId
-            )
-        ) {
-            return true;
-        }
-    }
-
-    return false;
+    enrichEndpointFromCache(projectRoot, ep);
 }
-
