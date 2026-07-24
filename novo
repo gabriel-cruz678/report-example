@@ -1,166 +1,182 @@
-private String buildCacheFileName(
+private Path findCacheFile(
+    String projectRoot,
     String method,
-    String pathOrUrl
-) {
-    String normalizedMethod =
-        normalizeCacheMethod(method);
+    String pathOrUrl,
+    String operationId
+) throws IOException {
 
-    String normalizedPath =
-        normalizeCachePath(pathOrUrl)
-            .replaceAll("\\{[^}]*}", "")
-            .replaceAll("[^a-z0-9]+", "_")
-            .replaceAll("^_+|_+$", "");
+    Path cacheRoot = Path.of(projectRoot, ".cache");
 
-    if (normalizedMethod.isEmpty()) {
-        return normalizedPath + ".json";
+    if (!Files.isDirectory(cacheRoot)) {
+        System.out.println(
+            "[API FLOW CACHE] Diretório não encontrado: "
+                + cacheRoot
+        );
+        return null;
     }
 
-    return normalizedMethod
-        + "_"
-        + normalizedPath
-        + ".json";
-}
+    List<Path> jsonFiles = new ArrayList<>();
 
-private String normalizeCacheMethod(String method) {
-    return method == null
-        ? ""
-        : method.trim().toLowerCase();
-}
-
-private String normalizeCachePath(String pathOrUrl) {
-    if (pathOrUrl == null || pathOrUrl.isBlank()) {
-        return "";
+    try (
+        java.util.stream.Stream<Path> stream =
+            Files.walk(cacheRoot)
+    ) {
+        stream
+            .filter(Files::isRegularFile)
+            .filter(file ->
+                file.getFileName()
+                    .toString()
+                    .toLowerCase(java.util.Locale.ROOT)
+                    .endsWith(".json")
+            )
+            .forEach(jsonFiles::add);
     }
 
-    String value = pathOrUrl.trim();
+    String expectedOperationId =
+        operationId == null
+            ? ""
+            : operationId.trim();
 
-    try {
-        if (
-            value.startsWith("http://")
-                || value.startsWith("https://")
-        ) {
-            java.net.URI uri =
-                java.net.URI.create(value);
+    /*
+     * 1. Busca principal pelo operationId exato.
+     */
+    if (!expectedOperationId.isEmpty()) {
+        List<Path> operationIdMatches =
+            new ArrayList<>();
 
-            value = uri.getPath() == null
-                ? ""
-                : uri.getPath();
+        for (Path cacheFile : jsonFiles) {
+            if (
+                cacheContainsOperationId(
+                    cacheFile,
+                    expectedOperationId
+                )
+            ) {
+                operationIdMatches.add(cacheFile);
+            }
         }
-    } catch (IllegalArgumentException ignored) {
+
+        if (operationIdMatches.size() == 1) {
+            Path found = operationIdMatches.get(0);
+
+            System.out.println(
+                "[API FLOW CACHE] Encontrado por operationId: "
+                    + expectedOperationId
+                    + " -> "
+                    + found
+            );
+
+            return found;
+        }
+
         /*
-         * Se não for uma URL válida, mantém o path
-         * original recebido.
+         * Caso raro: mais de um arquivo possui o mesmo operationId.
+         * Desempata por método e rota.
          */
+        if (operationIdMatches.size() > 1) {
+            List<Path> exactRequestMatches =
+                new ArrayList<>();
+
+            for (Path candidate : operationIdMatches) {
+                if (
+                    cacheMatchesMethodAndPath(
+                        candidate,
+                        method,
+                        pathOrUrl
+                    )
+                ) {
+                    exactRequestMatches.add(candidate);
+                }
+            }
+
+            if (exactRequestMatches.size() == 1) {
+                Path found = exactRequestMatches.get(0);
+
+                System.out.println(
+                    "[API FLOW CACHE] Encontrado por operationId "
+                        + "e method/path: "
+                        + found
+                );
+
+                return found;
+            }
+
+            System.out.println(
+                "[API FLOW CACHE] operationId ambíguo: "
+                    + expectedOperationId
+                    + ". Quantidade de arquivos: "
+                    + operationIdMatches.size()
+            );
+
+            for (Path candidate : operationIdMatches) {
+                System.out.println(
+                    "[API FLOW CACHE] Candidato: "
+                        + candidate
+                );
+            }
+
+            /*
+             * Não escolhe arbitrariamente um arquivo.
+             */
+            return null;
+        }
     }
 
-    int queryIndex = value.indexOf('?');
+    /*
+     * 2. Fallback para caches antigos sem operationId.
+     * Compara exatamente method e path/url.
+     */
+    List<Path> methodPathMatches =
+        new ArrayList<>();
 
-    if (queryIndex >= 0) {
-        value = value.substring(0, queryIndex);
+    for (Path cacheFile : jsonFiles) {
+        if (
+            cacheMatchesMethodAndPath(
+                cacheFile,
+                method,
+                pathOrUrl
+            )
+        ) {
+            methodPathMatches.add(cacheFile);
+        }
     }
 
-    int fragmentIndex = value.indexOf('#');
+    if (methodPathMatches.size() == 1) {
+        Path found = methodPathMatches.get(0);
 
-    if (fragmentIndex >= 0) {
-        value = value.substring(0, fragmentIndex);
-    }
-
-    return value
-        .replace('\\', '/')
-        .replaceAll("/+$", "")
-        .toLowerCase();
-}
-
-private boolean cacheFileMatches(
-    Path cacheFile,
-    String expectedMethod,
-    String expectedPathOrUrl
-) {
-    try {
-        String content = Files.readString(
-            cacheFile,
-            StandardCharsets.UTF_8
+        System.out.println(
+            "[API FLOW CACHE] Cache antigo encontrado "
+                + "por method/path: "
+                + found
         );
 
-        JsonElement parsed =
-            JsonParser.parseString(content);
+        return found;
+    }
 
-        JsonObject pathObject =
-            extractCachePathObject(parsed);
+    if (methodPathMatches.size() > 1) {
+        System.out.println(
+            "[API FLOW CACHE] Busca por method/path ambígua: "
+                + normalizeCacheMethod(method)
+                + " "
+                + normalizeCachePath(pathOrUrl)
+        );
 
-        String cacheMethod =
-            pathObject.has("method")
-                ? pathObject.get("method").getAsString()
-                : "";
-
-        String cacheUrl;
-
-        if (pathObject.has("url")) {
-            cacheUrl =
-                pathObject.get("url").getAsString();
-        } else if (pathObject.has("path")) {
-            cacheUrl =
-                pathObject.get("path").getAsString();
-        } else {
-            cacheUrl = "";
+        for (Path candidate : methodPathMatches) {
+            System.out.println(
+                "[API FLOW CACHE] Candidato: "
+                    + candidate
+            );
         }
-
-        boolean sameMethod =
-            normalizeCacheMethod(cacheMethod)
-                .equals(
-                    normalizeCacheMethod(expectedMethod)
-                );
-
-        boolean samePath =
-            normalizeCachePath(cacheUrl)
-                .equals(
-                    normalizeCachePath(expectedPathOrUrl)
-                );
-
-        return sameMethod && samePath;
-
-    } catch (Exception ignored) {
-        /*
-         * Um JSON inválido não deve interromper
-         * a busca pelos outros arquivos.
-         */
-        return false;
-    }
-}
-
-private JsonObject extractCachePathObject(
-    JsonElement parsed
-) {
-    if (parsed == null || parsed.isJsonNull()) {
-        return new JsonObject();
+    } else {
+        System.out.println(
+            "[API FLOW CACHE] Cache não encontrado."
+                + " operationId="
+                + expectedOperationId
+                + " | method="
+                + normalizeCacheMethod(method)
+                + " | path="
+                + normalizeCachePath(pathOrUrl)
+        );
     }
 
-    JsonObject entry = null;
-
-    if (parsed.isJsonArray()) {
-        JsonArray array = parsed.getAsJsonArray();
-
-        if (
-            array.size() > 0
-                && array.get(0).isJsonObject()
-        ) {
-            entry =
-                array.get(0).getAsJsonObject();
-        }
-    } else if (parsed.isJsonObject()) {
-        entry = parsed.getAsJsonObject();
-    }
-
-    if (entry == null) {
-        return new JsonObject();
-    }
-
-    if (
-        entry.has("path")
-            && entry.get("path").isJsonObject()
-    ) {
-        return entry.getAsJsonObject("path");
-    }
-
-    return entry;
+    return null;
 }
