@@ -1,182 +1,98 @@
-private Path findCacheFile(
-    String projectRoot,
-    String method,
-    String pathOrUrl,
-    String operationId
-) throws IOException {
-
-    Path cacheRoot = Path.of(projectRoot, ".cache");
-
-    if (!Files.isDirectory(cacheRoot)) {
-        System.out.println(
-            "[API FLOW CACHE] Diretório não encontrado: "
-                + cacheRoot
+private boolean cacheContainsOperationId(
+    Path cacheFile,
+    String expectedOperationId
+) {
+    try {
+        String content = Files.readString(
+            cacheFile,
+            StandardCharsets.UTF_8
         );
-        return null;
+
+        JsonElement parsed =
+            JsonParser.parseString(content);
+
+        return jsonContainsOperationId(
+            parsed,
+            expectedOperationId
+        );
+
+    } catch (Exception e) {
+        System.out.println(
+            "[API FLOW CACHE] Ignorando arquivo inválido: "
+                + cacheFile
+                + " | "
+                + e.getMessage()
+        );
+
+        return false;
+    }
+}
+
+private boolean jsonContainsOperationId(
+    JsonElement element,
+    String expectedOperationId
+) {
+    if (element == null || element.isJsonNull()) {
+        return false;
     }
 
-    List<Path> jsonFiles = new ArrayList<>();
-
-    try (
-        java.util.stream.Stream<Path> stream =
-            Files.walk(cacheRoot)
-    ) {
-        stream
-            .filter(Files::isRegularFile)
-            .filter(file ->
-                file.getFileName()
-                    .toString()
-                    .toLowerCase(java.util.Locale.ROOT)
-                    .endsWith(".json")
-            )
-            .forEach(jsonFiles::add);
-    }
-
-    String expectedOperationId =
-        operationId == null
-            ? ""
-            : operationId.trim();
-
-    /*
-     * 1. Busca principal pelo operationId exato.
-     */
-    if (!expectedOperationId.isEmpty()) {
-        List<Path> operationIdMatches =
-            new ArrayList<>();
-
-        for (Path cacheFile : jsonFiles) {
+    if (element.isJsonArray()) {
+        for (JsonElement item : element.getAsJsonArray()) {
             if (
-                cacheContainsOperationId(
-                    cacheFile,
+                jsonContainsOperationId(
+                    item,
                     expectedOperationId
                 )
             ) {
-                operationIdMatches.add(cacheFile);
+                return true;
             }
         }
 
-        if (operationIdMatches.size() == 1) {
-            Path found = operationIdMatches.get(0);
+        return false;
+    }
 
-            System.out.println(
-                "[API FLOW CACHE] Encontrado por operationId: "
-                    + expectedOperationId
-                    + " -> "
-                    + found
-            );
+    if (!element.isJsonObject()) {
+        return false;
+    }
 
-            return found;
-        }
+    JsonObject object = element.getAsJsonObject();
 
-        /*
-         * Caso raro: mais de um arquivo possui o mesmo operationId.
-         * Desempata por método e rota.
-         */
-        if (operationIdMatches.size() > 1) {
-            List<Path> exactRequestMatches =
-                new ArrayList<>();
+    if (
+        object.has("operationId")
+            && object.get("operationId").isJsonPrimitive()
+    ) {
+        String cachedOperationId =
+            object.get("operationId")
+                .getAsString()
+                .trim();
 
-            for (Path candidate : operationIdMatches) {
-                if (
-                    cacheMatchesMethodAndPath(
-                        candidate,
-                        method,
-                        pathOrUrl
-                    )
-                ) {
-                    exactRequestMatches.add(candidate);
-                }
-            }
-
-            if (exactRequestMatches.size() == 1) {
-                Path found = exactRequestMatches.get(0);
-
-                System.out.println(
-                    "[API FLOW CACHE] Encontrado por operationId "
-                        + "e method/path: "
-                        + found
-                );
-
-                return found;
-            }
-
-            System.out.println(
-                "[API FLOW CACHE] operationId ambíguo: "
-                    + expectedOperationId
-                    + ". Quantidade de arquivos: "
-                    + operationIdMatches.size()
-            );
-
-            for (Path candidate : operationIdMatches) {
-                System.out.println(
-                    "[API FLOW CACHE] Candidato: "
-                        + candidate
-                );
-            }
-
-            /*
-             * Não escolhe arbitrariamente um arquivo.
-             */
-            return null;
+        if (
+            cachedOperationId.equalsIgnoreCase(
+                expectedOperationId
+            )
+        ) {
+            return true;
         }
     }
 
     /*
-     * 2. Fallback para caches antigos sem operationId.
-     * Compara exatamente method e path/url.
+     * Também procura em objetos internos, caso futuramente
+     * o operationId seja gravado dentro de "path".
      */
-    List<Path> methodPathMatches =
-        new ArrayList<>();
-
-    for (Path cacheFile : jsonFiles) {
+    for (
+        Map.Entry<String, JsonElement> entry
+            : object.entrySet()
+    ) {
         if (
-            cacheMatchesMethodAndPath(
-                cacheFile,
-                method,
-                pathOrUrl
+            jsonContainsOperationId(
+                entry.getValue(),
+                expectedOperationId
             )
         ) {
-            methodPathMatches.add(cacheFile);
+            return true;
         }
     }
 
-    if (methodPathMatches.size() == 1) {
-        Path found = methodPathMatches.get(0);
-
-        System.out.println(
-            "[API FLOW CACHE] Cache antigo encontrado "
-                + "por method/path: "
-                + found
-        );
-
-        return found;
-    }
-
-    if (methodPathMatches.size() > 1) {
-        System.out.println(
-            "[API FLOW CACHE] Busca por method/path ambígua: "
-                + normalizeCacheMethod(method)
-                + " "
-                + normalizeCachePath(pathOrUrl)
-        );
-
-        for (Path candidate : methodPathMatches) {
-            System.out.println(
-                "[API FLOW CACHE] Candidato: "
-                    + candidate
-            );
-        }
-    } else {
-        System.out.println(
-            "[API FLOW CACHE] Cache não encontrado."
-                + " operationId="
-                + expectedOperationId
-                + " | method="
-                + normalizeCacheMethod(method)
-                + " | path="
-                + normalizeCachePath(pathOrUrl)
-        );
-    }
-
-    return null;
+    return false;
 }
+
